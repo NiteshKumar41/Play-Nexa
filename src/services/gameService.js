@@ -13,6 +13,26 @@ async function requestGameApi(path, { method = 'GET', body, requiresAdmin = fals
   return response.data
 }
 
+async function requestAdminGameApi(path, { method = 'GET', body } = {}) {
+  const response = await apiClient.request(`/admin/games${path}`, {
+    method,
+    body,
+  })
+  return response.data
+}
+
+function createGameFormData(gameData) {
+  const form = new FormData()
+  if (gameData.name !== undefined) form.set('name', String(gameData.name).trim())
+  if (gameData.gameCode !== undefined) form.set('gameCode', String(gameData.gameCode))
+  if (gameData.isActive !== undefined) form.set('status', String(Boolean(gameData.isActive)))
+  if (gameData.isOpen !== undefined) form.set('isOpen', String(Boolean(gameData.isOpen)))
+  if (typeof File !== 'undefined' && gameData.imageFile instanceof File && gameData.imageFile.size) {
+    form.set('image', gameData.imageFile)
+  }
+  return form
+}
+
 export function getGameImageSource(imageUrl) {
   if (!imageUrl) return ''
   if (/^https?:\/\//i.test(imageUrl)) return imageUrl
@@ -53,46 +73,39 @@ export async function getGameById(gameId) {
 
 export async function getAdminGames({ page = 1, limit = 100 } = {}) {
   const query = new URLSearchParams({ page: String(page), limit: String(limit) })
-  const result = await requestGameApi(`/admin?${query}`, { requiresAdmin: true })
+  const result = await requestAdminGameApi(`?${query}`)
   return result.games
 }
 
 export async function createGame(gameData) {
-  const result = await requestGameApi('', {
+  const result = await requestAdminGameApi('', {
     method: 'POST',
-    body: gameData,
-    requiresAdmin: true,
+    body: createGameFormData(gameData),
   })
   return result.game
 }
 
 export async function updateGame(gameId, updates) {
-  const result = await requestGameApi(`/${encodeURIComponent(gameId)}`, {
-    method: 'PUT',
-    body: updates,
-    requiresAdmin: true,
+  const result = await requestAdminGameApi(`/${encodeURIComponent(gameId)}`, {
+    method: 'PATCH',
+    body: createGameFormData(updates),
   })
   return result.game
 }
 
 export async function toggleGameStatus(gameId, isActive) {
-  const result = await requestGameApi(`/${encodeURIComponent(gameId)}/status`, {
+  const result = await requestAdminGameApi(`/${encodeURIComponent(gameId)}`, {
     method: 'PATCH',
-    body: { isActive },
-    requiresAdmin: true,
+    body: createGameFormData({ isActive }),
   })
   return result.game
 }
 
 export async function toggleGameOpenStatus(gameId, isOpen) {
-  const result = await requestGameApi(
-    `/${encodeURIComponent(gameId)}/open-status`,
-    {
-      method: 'PATCH',
-      body: { isOpen },
-      requiresAdmin: true,
-    },
-  )
+  const result = await requestAdminGameApi(`/${encodeURIComponent(gameId)}`, {
+    method: 'PATCH',
+    body: createGameFormData({ isOpen }),
+  })
   return result.game
 }
 

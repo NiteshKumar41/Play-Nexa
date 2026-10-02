@@ -91,6 +91,7 @@ export function Lobby({ notify }) {
   const gameRef=useRef(game)
   const notifyRef=useRef(notify)
   const lobbyLoadRevision=useRef(0)
+  const createRequestId=useRef(null)
   useEffect(()=>{gameRef.current=game},[game])
   useEffect(()=>{notifyRef.current=notify},[notify])
   const loadLobby=useCallback(async()=>{
@@ -156,14 +157,24 @@ export function Lobby({ notify }) {
       unsubscribe()
     }
   },[game?.id,game?.gameCode,game?.slug,game?.image_url,game?.is_open,game?.name,loadLobby])
+  function openCreateMatch(){
+    createRequestId.current=globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    setModal(true)
+  }
   async function createMatch(entry){
     setSubmitting(true)
     try{
-      await createMatchRequest({gameId:game.id,entryAmount:entry})
+      await createMatchRequest({
+        gameId:game.id,
+        entryAmount:entry,
+        clientRequestId:createRequestId.current || globalThis.crypto?.randomUUID?.(),
+      })
+      createRequestId.current=null
       setModal(false)
       await loadLobby()
       notify('Your match is open in the lobby.')
     }catch(createError){
+      createRequestId.current=null
       notify(createError instanceof Error?createError.message:'Unable to create match.')
     }finally{
       setSubmitting(false)
@@ -201,7 +212,7 @@ export function Lobby({ notify }) {
         eyebrow="OPEN MATCHES"
         title={game ? `${game.name} lobby` : 'Game lobby'}
         subtitle="Find a player and get into the game."
-        action={game?.is_open && <Button onClick={() => setModal(true)}><Plus size={16}/> Create match</Button>}
+        action={game?.is_open && <Button onClick={openCreateMatch}><Plus size={16}/> Create match</Button>}
       />
       {game && (
         <div className="lobby-hero">

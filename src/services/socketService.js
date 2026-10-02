@@ -14,6 +14,10 @@ const SOCKET_EVENTS = {
   MATCH_SETTLED: 'match_settled',
   MATCH_REFUNDED: 'match_refunded',
   MATCH_CLAIM_REJECTED: 'match_claim_rejected',
+  DEPOSIT_APPROVED: 'deposit_approved',
+  DEPOSIT_REJECTED: 'deposit_rejected',
+  WITHDRAWAL_SUCCESS: 'withdrawal_success',
+  WITHDRAWAL_FAILED: 'withdrawal_failed',
   SOCKET_ERROR: 'socket_error',
 }
 
@@ -144,6 +148,22 @@ export function onMatchRefunded(callback) {
 
 export function onMatchClaimRejected(callback) {
   addListener(SOCKET_EVENTS.MATCH_CLAIM_REJECTED, callback)
+}
+
+export function subscribeToWalletUpdates(callback) {
+  const events = [
+    SOCKET_EVENTS.DEPOSIT_APPROVED,
+    SOCKET_EVENTS.DEPOSIT_REJECTED,
+    SOCKET_EVENTS.WITHDRAWAL_SUCCESS,
+    SOCKET_EVENTS.WITHDRAWAL_FAILED,
+  ]
+  const handlers = events.map(event => {
+    const handler = payload => callback(event, payload)
+    addListener(event, handler)
+    return [event, handler]
+  })
+
+  return () => handlers.forEach(([event, handler]) => removeListener(event, handler))
 }
 
 export function onSocketError(callback) {

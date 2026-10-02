@@ -15,6 +15,12 @@
  * @property {string} createdAt
  * @property {string | null} completedAt
  *
+ * @typedef {Object} SettlementPlayer
+ * @property {string} id
+ * @property {string} name
+ * @property {string} phone
+ * @property {number} amount
+ *
  * @typedef {Object} SettlementFinancials
  * @property {number} player1Amount
  * @property {number | null} player2Amount
@@ -22,6 +28,36 @@
  * @property {number} platformFee
  * @property {number} winnerAmount
  * @property {number | null} refundAmountPerPlayer
+ *
+ * @typedef {Object} SettlementWalletTransaction
+ * @property {string} id
+ * @property {string} walletId
+ * @property {string} userId
+ * @property {'GAME_WIN' | 'GAME_REFUND'} transactionType
+ * @property {number} amount
+ * @property {number} balanceBefore
+ * @property {number} balanceAfter
+ * @property {'SUCCESS'} status
+ * @property {string | null} referenceId
+ * @property {'MATCH_SETTLEMENT' | 'MATCH_REFUND' | null} referenceType
+ * @property {string} createdAt
+ *
+ * @typedef {Object} SettlementDetail
+ * @property {Object} match
+ * @property {string} match.id
+ * @property {{ id: string, gameCode: number, name: string } | null} match.game
+ * @property {SettlementPlayer | null} match.player1
+ * @property {SettlementPlayer | null} match.player2
+ * @property {string} match.status
+ * @property {{ id: string, name: string, phone: string } | null} match.winnerPlayer
+ * @property {string | null} match.winnerClaimedBy
+ * @property {'PENDING' | 'APPROVED' | 'REJECTED' | null} match.winnerClaimStatus
+ * @property {string | null} match.p1Screenshot
+ * @property {string | null} match.p2Screenshot
+ * @property {string | null} match.disputeReason
+ * @property {SettlementFinancials} match.financials
+ * @property {Object} match.settlement
+ * @property {SettlementWalletTransaction[]} walletTransactions
  */
 
 export {}

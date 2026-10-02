@@ -5,7 +5,7 @@ import { Button, ConfirmModal, DataState, FormField, Modal, PageTitle, Panel, St
 import { formatINR } from '../../data/mockData'
 import { declareWinner, getPendingSettlements, getSettlement, refundBothPlayers, rejectWinnerClaim, releaseSettlementEvidence } from '../../services/adminSettlementService'
 import { getAdminSupportTickets, updateSupportTicket } from '../../services/supportService'
-import { getAdminDashboardSummary, getAdminDeposits, getAdminPaymentMethods, getAdminUsers, getAdminWithdrawals, processManualDeposit, saveAdminPaymentMethod, updateAdminUser, uploadPaymentQr } from '../../services/adminService'
+import { getAdminDashboardSummary, getAdminDepositProof, getAdminDeposits, getAdminPaymentMethods, getAdminUsers, getAdminWithdrawals, processManualDeposit, saveAdminPaymentMethod, updateAdminUser } from '../../services/adminService'
 import { createGame, getAdminGames, toggleGameOpenStatus, toggleGameStatus, updateGame } from '../../services/gameService'
 import { GameImage } from '../../components/games/GameImage'
 import { approveWithdrawal, rejectWithdrawal } from '../../services/walletService'
@@ -42,19 +42,39 @@ function AdminTabs({items,value,onChange}) { return <div className="filter-tabs"
 
 function Deposits({notify}) {
   const [tab,setTab]=useState('PENDING'),[rows,setRows]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[confirm,setConfirm]=useState(null),[proof,setProof]=useState(null)
+  const [proofImage,setProofImage]=useState(''),[proofLoading,setProofLoading]=useState(false),[proofError,setProofError]=useState('')
+  const proofRevision=useRef(0)
   const load=useCallback(async()=>{setLoading(true);setError('');try{setRows(await getAdminDeposits())}catch(loadError){setError(loadError instanceof Error?loadError.message:'Unable to load deposits.')}finally{setLoading(false)}},[])
   useEffect(()=>{queueMicrotask(load)},[load])
+  useEffect(()=>()=>{if(proofImage)URL.revokeObjectURL(proofImage)},[proofImage])
   const visible=rows.filter(row=>row.status===tab),labels={PENDING:'Pending',APPROVED:'Approved',REJECTED:'Rejected'}
   async function act(approve){try{await processManualDeposit({depositId:confirm.row.id,approve});notify(`Deposit ${approve?'approved':'rejected'}.`);setConfirm(null);await load()}catch(actionError){setError(actionError instanceof Error?actionError.message:'Unable to process deposit.');setConfirm(null)}}
-  return <><PageTitle eyebrow="PAYMENT OPERATIONS" title="Deposits" subtitle="Review player payment proofs and confirm wallet credits."/><AdminTabs items={Object.keys(labels)} value={tab} onChange={setTab}/><Panel className="admin-table-deposits" title={`${labels[tab]} deposits`} subtitle={`${visible.length} requests in this queue`}><DataState loading={loading} error={error} retry={load} empty={!visible.length}><div className="table-wrap"><table><thead><tr><th>Request</th><th>Player</th><th>Amount</th><th>Method</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead><tbody>{visible.map(row=><tr key={row.id}><td><strong>{row.id.slice(0,8)}</strong></td><td>{row.user?.full_name||row.user_id}<small>{row.user?.phone||''}</small></td><td><strong>{formatINR(Number(row.amount))}</strong></td><td>{row.payment_method?.display_name||row.payment_method?.provider}</td><td>{new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'}).format(new Date(row.created_at))}</td><td><Status>{labels[row.status]}</Status></td><td><div className="table-actions"><Button variant="ghost" onClick={()=>setProof(row)}>View proof</Button>{row.status==='PENDING'&&<><Button variant="success" onClick={()=>setConfirm({row,approve:true})}>Approve</Button><Button variant="danger-outline" onClick={()=>setConfirm({row,approve:false})}>Reject</Button></>}</div></td></tr>)}</tbody></table></div></DataState></Panel>{confirm&&<ConfirmModal title={`${confirm.approve?'Approve':'Reject'} deposit?`} message={`${confirm.approve?'Approve and credit':'Reject'} ${formatINR(Number(confirm.row.amount))} for ${confirm.row.user?.full_name||'this player'}?`} confirmLabel={confirm.approve?'Approve':'Reject'} danger={!confirm.approve} onClose={()=>setConfirm(null)} onConfirm={()=>act(confirm.approve)}/ >}{proof&&<Modal title={`Payment proof · ${proof.id.slice(0,8)}`} onClose={()=>setProof(null)}><div className="proof-preview"><strong>{formatINR(Number(proof.amount))}</strong><small>{proof.user?.full_name||proof.user_id} · {proof.payment_method?.display_name}</small><img src={proof.proof_url} alt="Manual deposit proof" style={{maxWidth:'100%',maxHeight:420,objectFit:'contain'}}/></div><div className="modal-actions"><Button variant="secondary" onClick={()=>setProof(null)}>Close</Button></div></Modal>}</>
+  async function viewProof(row){
+    const revision=++proofRevision.current
+    setProof(row);setProofImage('');setProofError('');setProofLoading(true)
+    try{
+      const url=URL.createObjectURL(await getAdminDepositProof(row.proof_url))
+      if(revision!==proofRevision.current)URL.revokeObjectURL(url)
+      else setProofImage(url)
+    }catch(proofLoadError){
+      if(revision===proofRevision.current)setProofError(proofLoadError instanceof Error?proofLoadError.message:'Unable to load payment proof.')
+    }finally{
+      if(revision===proofRevision.current)setProofLoading(false)
+    }
+  }
+  function closeProof(){
+    proofRevision.current+=1
+    setProof(null);setProofImage('');setProofError('');setProofLoading(false)
+  }
+  return <><PageTitle eyebrow="PAYMENT OPERATIONS" title="Deposits" subtitle="Review player payment proofs and confirm wallet credits."/><AdminTabs items={Object.keys(labels)} value={tab} onChange={setTab}/><Panel className="admin-table-deposits" title={`${labels[tab]} deposits`} subtitle={`${visible.length} requests in this queue`}><DataState loading={loading} error={error} retry={load} empty={!visible.length}><div className="table-wrap"><table><thead><tr><th>Request</th><th>Player</th><th>Amount</th><th>Method</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead><tbody>{visible.map(row=><tr key={row.id}><td><strong>{row.id.slice(0,8)}</strong></td><td>{row.user?.full_name||row.user_id}<small>{row.user?.phone||''}</small></td><td><strong>{formatINR(Number(row.amount))}</strong></td><td>{row.payment_method?.display_name||row.payment_method?.provider}</td><td>{new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'}).format(new Date(row.created_at))}</td><td><Status>{labels[row.status]}</Status></td><td><div className="table-actions"><Button variant="ghost" onClick={()=>void viewProof(row)}>View proof</Button>{row.status==='PENDING'&&<><Button variant="success" onClick={()=>setConfirm({row,approve:true})}>Approve</Button><Button variant="danger-outline" onClick={()=>setConfirm({row,approve:false})}>Reject</Button></>}</div></td></tr>)}</tbody></table></div></DataState></Panel>{confirm&&<ConfirmModal title={`${confirm.approve?'Approve':'Reject'} deposit?`} message={`${confirm.approve?'Approve and credit':'Reject'} ${formatINR(Number(confirm.row.amount))} for ${confirm.row.user?.full_name||'this player'}?`} confirmLabel={confirm.approve?'Approve':'Reject'} danger={!confirm.approve} onClose={()=>setConfirm(null)} onConfirm={()=>act(confirm.approve)}/ >}{proof&&<Modal title={`Payment proof · ${proof.id.slice(0,8)}`} onClose={closeProof}><div className="proof-preview"><strong>{formatINR(Number(proof.amount))}</strong><small>{proof.user?.full_name||proof.user_id} · {proof.payment_method?.display_name}</small>{proofLoading?<p role="status">Loading payment proof…</p>:proofError?<p className="auth-error" role="alert">{proofError}</p>:proofImage&&<img src={proofImage} alt="Manual deposit proof" style={{maxWidth:'100%',maxHeight:420,objectFit:'contain'}}/>}</div><div className="modal-actions"><Button variant="secondary" onClick={closeProof}>Close</Button></div></Modal>}</>
 }
 
 function Payouts({notify}) {
   const [rows,setRows]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[confirm,setConfirm]=useState(null),[busy,setBusy]=useState(false),[actionError,setActionError]=useState('')
   const load=useCallback(async()=>{setLoading(true);setError('');try{setRows(await getAdminWithdrawals())}catch(loadError){setError(loadError instanceof Error?loadError.message:'Unable to load payouts.')}finally{setLoading(false)}},[])
   useEffect(()=>{queueMicrotask(load)},[load])
-  async function process(event){event.preventDefault();setBusy(true);setActionError('');try{const values=new FormData(event.currentTarget);if(confirm.action==='approve')await approveWithdrawal({withdrawalId:confirm.row.id,utr:values.get('utr'),payoutTransactionId:values.get('transactionId')});else await rejectWithdrawal(confirm.row.id);notify(confirm.action==='approve'?'Withdrawal payout marked successful.':'Withdrawal rejected and refunded.');setConfirm(null);await load()}catch(processError){setActionError(processError instanceof Error?processError.message:'Unable to process withdrawal.')}finally{setBusy(false)}}
-  return <><PageTitle eyebrow="PAYMENT OPERATIONS" title="Payouts" subtitle="Review withdrawal requests and keep payouts moving securely."/><Panel className="admin-table-payouts" title="Withdrawal requests" subtitle={`${rows.filter(row=>row.status==='INITIATED').length} requests need attention`}><DataState loading={loading} error={error} retry={load} empty={!rows.length}><div className="table-wrap"><table><thead><tr><th>User</th><th>Phone</th><th>Amount</th><th>UPI ID</th><th>Requested date</th><th>Status</th><th>Actions</th></tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.wallet?.user?.full_name||'Player'}</strong><small>{row.id.slice(0,8)}</small></td><td>{row.wallet?.user?.phone||'—'}</td><td><strong>{formatINR(Number(row.amount))}</strong></td><td>{row.payout_upi_id}</td><td>{new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'}).format(new Date(row.created_at))}</td><td><Status>{row.status.replaceAll('_',' ')}</Status></td><td>{row.status==='INITIATED'&&<div className="table-actions"><Button variant="success" onClick={()=>{setActionError('');setConfirm({row,action:'approve'})}}>Approve payout</Button><Button variant="danger-outline" onClick={()=>{setActionError('');setConfirm({row,action:'reject'})}}>Reject</Button></div>}</td></tr>)}</tbody></table></div></DataState></Panel>{confirm&&<Modal title={confirm.action==='approve'?'Approve payout?':'Reject payout?'} onClose={()=>!busy&&setConfirm(null)}><form className="form-stack" onSubmit={process}><p>{formatINR(Number(confirm.row.amount))} payout to {confirm.row.payout_upi_id}</p>{confirm.action==='approve'&&<><FormField label="UTR"><input name="utr" maxLength="255" required/></FormField><FormField label="Payout transaction ID"><input name="transactionId" maxLength="255" required/></FormField></>}{actionError&&<p className="auth-error" role="alert">{actionError}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={busy} onClick={()=>setConfirm(null)}>Cancel</Button><Button variant={confirm.action==='reject'?'danger':'primary'} type="submit" disabled={busy}>{busy?'Processing…':confirm.action==='approve'?'Mark successful':'Reject and refund'}</Button></div></form></Modal>}</>
+  async function process(event){event.preventDefault();setBusy(true);setActionError('');try{const values=new FormData(event.currentTarget);if(confirm.action==='approve')await approveWithdrawal({withdrawalId:confirm.row.id,utr:values.get('utr')});else await rejectWithdrawal(confirm.row.id);notify(confirm.action==='approve'?'Withdrawal payout marked successful.':'Withdrawal rejected and refunded.');setConfirm(null);await load()}catch(processError){setActionError(processError instanceof Error?processError.message:'Unable to process withdrawal.')}finally{setBusy(false)}}
+  return <><PageTitle eyebrow="PAYMENT OPERATIONS" title="Payouts" subtitle="Review withdrawal requests and keep payouts moving securely."/><Panel className="admin-table-payouts" title="Withdrawal requests" subtitle={`${rows.filter(row=>row.status==='INITIATED').length} requests need attention`}><DataState loading={loading} error={error} retry={load} empty={!rows.length}><div className="table-wrap"><table><thead><tr><th>User</th><th>Phone</th><th>Amount</th><th>UPI ID</th><th>Requested date</th><th>Status</th><th>Actions</th></tr></thead><tbody>{rows.map(row=><tr key={row.id}><td><strong>{row.wallet?.user?.full_name||'Player'}</strong><small>{row.id.slice(0,8)}</small></td><td>{row.wallet?.user?.phone||'—'}</td><td><strong>{formatINR(Number(row.amount))}</strong></td><td>{row.payout_upi_id}</td><td>{new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'}).format(new Date(row.created_at))}</td><td><Status>{row.status.replaceAll('_',' ')}</Status></td><td>{row.status==='INITIATED'&&<div className="table-actions"><Button variant="success" onClick={()=>{setActionError('');setConfirm({row,action:'approve'})}}>Approve payout</Button><Button variant="danger-outline" onClick={()=>{setActionError('');setConfirm({row,action:'reject'})}}>Reject</Button></div>}</td></tr>)}</tbody></table></div></DataState></Panel>{confirm&&<Modal title={confirm.action==='approve'?'Approve payout?':'Reject payout?'} onClose={()=>!busy&&setConfirm(null)}><form className="form-stack" onSubmit={process}><p>{formatINR(Number(confirm.row.amount))} payout to {confirm.row.payout_upi_id}</p>{confirm.action==='approve'&&<FormField label="UTR / reference number"><input name="utr" maxLength="200" required/></FormField>}{actionError&&<p className="auth-error" role="alert">{actionError}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={busy} onClick={()=>setConfirm(null)}>Cancel</Button><Button variant={confirm.action==='reject'?'danger':'primary'} type="submit" disabled={busy}>{busy?'Processing…':confirm.action==='approve'?'Mark successful':'Reject and refund'}</Button></div></form></Modal>}</>
 }
 
 function Settlements({notify}) {
@@ -82,6 +102,7 @@ function Settlements({notify}) {
     return()=>{cancelled=true}
   },[loadQueue])
   useEffect(()=>()=>releaseSettlementEvidence(settlementDetail),[settlementDetail])
+  useEffect(()=>()=>{detailRevision.current+=1},[])
   const loadDetail=useCallback(async()=>{
     if(!selectedMatchId)return
     const revision=++detailRevision.current
@@ -105,6 +126,12 @@ function Settlements({notify}) {
     setSelectedMatchId('')
     setSettlementDetail(null)
     setDetailError('')
+  }
+  function openSettlement(matchId){
+    setSettlementDetail(null)
+    setDetailLoading(true)
+    setDetailError('')
+    setSelectedMatchId(matchId)
   }
   async function completeDecision(event){
     event?.preventDefault()
@@ -162,7 +189,7 @@ function Settlements({notify}) {
           <td><small>{playerLabel(row.player1,'Player 1')}</small><small>{playerLabel(row.player2,'Player 2')}</small></td>
           <td>{formatINR(Number(row.player1?.amount||0))}</td><td>{formatINR(Number(row.prizePool||0))}</td>
           <td>{claimLabel(row)}<small>{row.winnerClaimStatus||''}</small></td>
-          <td><button className="text-link" type="button" onClick={()=>{setSettlementDetail(null);setSelectedMatchId(row.id)}}>View evidence</button></td>
+          <td><button className="text-link" type="button" onClick={()=>openSettlement(row.id)}>View evidence</button></td>
           <td><Status>{row.status}</Status></td>
           <td><div className="table-actions">
             {row.winnerClaimStatus==='PENDING'&&<Button variant="success" onClick={()=>{setDecisionError('');setDecision({row,action:'Declare Winner'})}}>Declare winner</Button>}
@@ -212,7 +239,9 @@ function Settlements({notify}) {
             <p><strong>Players joined:</strong> {match.joinedAt?formatIndiaDateTime(match.joinedAt):'—'}</p>
             {match.completedAt&&<p><strong>Completed:</strong> {formatIndiaDateTime(match.completedAt)}</p>}
             {match.settlement.settledAt&&<p><strong>Finalized:</strong> {formatIndiaDateTime(match.settlement.settledAt)} · by {match.settlement.settledBy?.name||'admin'}</p>}
+            {match.settlement.settlementAction&&<p><strong>Final action:</strong> {match.settlement.settlementAction}</p>}
             {match.settlement.settlementReason&&<p><strong>Settlement note:</strong> {match.settlement.settlementReason}</p>}
+            {match.settlement.rejectionReason&&<p><strong>Rejection reason:</strong> {match.settlement.rejectionReason}</p>}
             {match.player1ScreenshotUrl&&<div><small>Player 1 screenshot</small><img src={match.player1ScreenshotUrl} alt="Player 1 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
             {match.player2ScreenshotUrl&&<div><small>Player 2 screenshot</small><img src={match.player2ScreenshotUrl} alt="Player 2 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
             {settlementDetail.walletTransactions.length>0&&<div className="form-stack"><strong>Wallet transactions</strong>{settlementDetail.walletTransactions.map(transaction=><p key={transaction.id}>{transaction.transactionType} · {formatINR(Number(transaction.amount))} · {transaction.status} · {transaction.id.slice(0,8)}</p>)}</div>}
@@ -232,8 +261,7 @@ function GamesAdmin({notify}) {
     event.preventDefault();setSaving(true);setError('')
     try{
       const form=new FormData(event.currentTarget)
-      const gameData={gameCode:Number(form.get('gameCode')),name:String(form.get('name')).trim(),imageUrl:String(form.get('imageUrl')||'').trim(),isActive:form.get('isActive')==='on',isOpen:form.get('isOpen')==='on'}
-      if(!gameData.imageUrl&&editing==='new')delete gameData.imageUrl
+      const gameData={gameCode:Number(form.get('gameCode')),name:String(form.get('name')).trim(),imageFile:form.get('image'),isActive:form.get('isActive')==='on',isOpen:form.get('isOpen')==='on'}
       if(editing==='new')await createGame(gameData)
       else await updateGame(editing.id,gameData)
       notify(`Game ${editing==='new'?'added':'updated'}.`);setEditing(null);await load()
@@ -246,10 +274,26 @@ function GamesAdmin({notify}) {
       if(key==='active')await toggleGameStatus(game.id,!game.isActive)
       else await toggleGameOpenStatus(game.id,!game.isOpen)
       notify(`${game.name} availability updated.`);await load()
-    }
-    catch(toggleError){setError(toggleError instanceof Error?toggleError.message:'Unable to update game.')}
+    }catch(toggleError){setError(toggleError instanceof Error?toggleError.message:'Unable to update game.')}
   }
-  return <><PageTitle eyebrow="CATALOG MANAGEMENT" title="Games" subtitle="Manage the games available to players." action={<Button onClick={()=>setEditing('new')}><Plus size={16}/> Add game</Button>}/><Panel title="Game catalog" subtitle="Edit listing details or switch game availability."><DataState loading={loading} error={error} retry={load} empty={!rows.length}><div className="admin-game-list">{rows.map(game=><article className="admin-game-row" key={game.id}>{game.imageUrl?<GameImage className="game-mini" src={game.imageUrl} alt="" fallback={<div className="game-mini">🎮</div>}/>:<div className="game-mini">🎮</div>}<div className="row-grow"><strong>{game.name}</strong><small>Code {game.gameCode} · Matchmaking {game.isOpen?'open':'closed'}</small></div><Status>{game.isActive?'Active':'Inactive'}</Status><Button variant="ghost" onClick={()=>setEditing(game)}>Edit</Button><Button variant="secondary" onClick={()=>toggleGame(game,'active')}>{game.isActive?'Deactivate':'Activate'}</Button><Button variant="secondary" onClick={()=>toggleGame(game,'open')}>{game.isOpen?'Close lobby':'Open lobby'}</Button></article>)}</div></DataState></Panel>{editing&&<Modal title={editing==='new'?'Add a game':`Edit ${editing.name}`} onClose={()=>!saving&&setEditing(null)}><form className="form-stack" onSubmit={saveGame}><FormField label="Game name"><input name="name" required maxLength="120" defaultValue={editing==='new'?'':editing.name} placeholder="e.g. Table Tennis"/></FormField><FormField label="Game code"><input name="gameCode" type="number" min="1" step="1" required defaultValue={editing==='new'?'':editing.gameCode} placeholder="Enter a positive number"/></FormField><FormField label="Game image URL"><input name="imageUrl" type="text" defaultValue={editing==='new'?'':editing.imageUrl||''} placeholder="https://example.com/game-image.png"/></FormField><label className="check-field"><input name="isActive" type="checkbox" defaultChecked={editing==='new'||editing.isActive}/> Active</label><label className="check-field"><input name="isOpen" type="checkbox" defaultChecked={editing==='new'||editing.isOpen}/> Open for matchmaking</label>{error&&<p className="auth-error" role="alert">{error}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={saving} onClick={()=>setEditing(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving?'Saving…':editing==='new'?'Add game':'Save changes'}</Button></div></form></Modal>}</>
+  return <>
+    <PageTitle eyebrow="CATALOG MANAGEMENT" title="Games" subtitle="Manage the games available to players." action={<Button onClick={()=>setEditing('new')}><Plus size={16}/> Add game</Button>}/>
+    <Panel title="Game catalog" subtitle="Edit listing details or switch game availability.">
+      <DataState loading={loading} error={error} retry={load} empty={!rows.length}>
+        <div className="admin-game-list">
+          {rows.map(game=><article className="admin-game-row" key={game.id}>
+            {game.imageUrl?<GameImage className="game-mini" src={game.imageUrl} alt="" fallback={<div className="game-mini">🎮</div>}/>:<div className="game-mini">🎮</div>}
+            <div className="row-grow"><strong>{game.name}</strong><small>Code {game.gameCode} · Matchmaking {game.isOpen?'open':'closed'} · Created {game.createdAt?formatIndiaDateTime(game.createdAt):'—'}</small></div>
+            <Status>{game.isActive?'Active':'Inactive'}</Status>
+            <Button variant="ghost" onClick={()=>setEditing(game)}>Edit</Button>
+            <Button variant="secondary" onClick={()=>toggleGame(game,'active')}>{game.isActive?'Deactivate':'Activate'}</Button>
+            <Button variant="secondary" onClick={()=>toggleGame(game,'open')}>{game.isOpen?'Close lobby':'Open lobby'}</Button>
+          </article>)}
+        </div>
+      </DataState>
+    </Panel>
+    {editing&&<Modal title={editing==='new'?'Add a game':`Edit ${editing.name}`} onClose={()=>!saving&&setEditing(null)}><form className="form-stack" onSubmit={saveGame}><FormField label="Game name"><input name="name" required maxLength="120" defaultValue={editing==='new'?'':editing.name} placeholder="e.g. Table Tennis"/></FormField><FormField label="Game code"><input name="gameCode" type="number" min="1" step="1" required defaultValue={editing==='new'?'':editing.gameCode} placeholder="Enter a positive number"/></FormField><FormField label="Thumbnail"><input name="image" type="file" accept="image/jpeg,image/png,image/webp"/></FormField><label className="check-field"><input name="isActive" type="checkbox" defaultChecked={editing==='new'||editing.isActive}/> Active</label><label className="check-field"><input name="isOpen" type="checkbox" defaultChecked={editing==='new'||editing.isOpen}/> Open for matchmaking</label>{error&&<p className="auth-error" role="alert">{error}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={saving} onClick={()=>setEditing(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving?'Saving…':editing==='new'?'Add game':'Save changes'}</Button></div></form></Modal>}
+  </>
 }
 
 function PaymentsAdmin({notify}) {
@@ -261,17 +305,33 @@ function PaymentsAdmin({notify}) {
     event.preventDefault();setSaving(true);setError('')
     try{
       const form=new FormData(event.currentTarget),file=form.get('qr')
-      const qrStoragePath=file instanceof File&&file.size?await uploadPaymentQr(file):isEditing?editingMethod.qr_storage_path:null
-      await saveAdminPaymentMethod({id:editingMethod?.id,displayName:form.get('displayName'),provider:form.get('provider'),upiId:form.get('upi'),payeeName:form.get('payee'),qrStoragePath,isActive:form.get('isActive')==='on'})
+      await saveAdminPaymentMethod({id:editingMethod?.id,upiId:form.get('upi'),payeeName:form.get('payee'),qrFile:file,isActive:form.get('isActive')==='on',wasActive:editingMethod?.is_active})
       notify(`Payment method ${isEditing?'updated':'added'}.`);setEditingMethod(null);await load()
     }catch(saveError){setError(saveError instanceof Error?saveError.message:'Unable to save payment method.')}
     finally{setSaving(false)}
   }
   async function activate(method){
-    try{await saveAdminPaymentMethod({id:method.id,displayName:method.display_name,provider:method.provider,upiId:method.upi_id,payeeName:method.payee_name,qrStoragePath:method.qr_storage_path,isActive:true});notify('Payment method activated.');await load()}
+    try{await saveAdminPaymentMethod({id:method.id,upiId:method.upi_id,payeeName:method.payee_name,isActive:true});notify('Payment method activated.');await load()}
     catch(activateError){setError(activateError instanceof Error?activateError.message:'Unable to activate payment method.')}
   }
-  return <><PageTitle eyebrow="PAYMENT CONFIGURATION" title="Payment methods" subtitle="Configure collection accounts and QR codes. Only one method can be active." action={<Button onClick={()=>{setError('');setEditingMethod('new')}}><Plus size={16}/> Add payment method</Button>}/><div className="info-banner"><ShieldCheck size={18}/><span>Exactly one payment method should remain active so deposits are routed consistently.</span></div><DataState loading={loading} error={error} retry={load} empty={!methods.length}><div className="payment-method-grid">{methods.map(method=><article className={`payment-method ${method.is_active?'method-active':''}`} key={method.id}><div className="payment-method-head"><span className="upi-mark">{method.provider==='manual_upi'?'UPI':'GATEWAY'}</span><Status>{method.is_active?'Active':'Inactive'}</Status></div><small>{method.provider==='manual_upi'?'COLLECTION UPI ID':'PAYMENT GATEWAY'}</small><strong className="upi-value">{method.upi_id||method.display_name}</strong><p>{method.payee_name||method.display_name}</p><div className="qr-box">{method.qr_url?<img src={method.qr_url} alt="Payment QR code" style={{width:88,height:88,objectFit:'contain'}}/>:<span className="qr-mock">▦</span>}<span><strong>{method.qr_storage_path?'Collection QR code':'No QR image'}</strong><small>{method.display_name}</small></span></div><div className="table-actions"><Button variant="ghost" onClick={()=>{setError('');setEditingMethod(method)}}>Edit</Button><Button variant={method.is_active?'secondary':'primary'} disabled={method.is_active} onClick={()=>activate(method)}>{method.is_active?'Currently active':'Make active'}</Button></div></article>)}</div></DataState>{editingMethod!==null&&<Modal title={isEditing?'Edit payment method':'Add payment method'} onClose={()=>!saving&&setEditingMethod(null)}><form className="form-stack" onSubmit={saveMethod}><FormField label="Display name"><input name="displayName" maxLength="160" required defaultValue={editingMethod?.display_name||''} placeholder="Primary UPI collection"/></FormField><FormField label="Provider"><select name="provider" defaultValue={editingMethod?.provider||'manual_upi'}><option value="manual_upi">Manual UPI</option><option value="gateway">Payment gateway</option></select></FormField><FormField label="UPI ID"><input name="upi" defaultValue={editingMethod?.upi_id||''} placeholder="payments@bank"/></FormField><FormField label="Payee name"><input name="payee" defaultValue={editingMethod?.payee_name||''} placeholder="Registered business name"/></FormField><FormField label="QR image"><input name="qr" type="file" accept="image/jpeg,image/png,image/webp"/></FormField><label className="check-field"><input name="isActive" type="checkbox" defaultChecked={Boolean(editingMethod?.is_active)}/> Make active (deactivates the previous method)</label>{error&&<p className="auth-error" role="alert">{error}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={saving} onClick={()=>setEditingMethod(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving?'Saving…':'Save method'}</Button></div></form></Modal>}</>
+  return <>
+    <PageTitle eyebrow="PAYMENT CONFIGURATION" title="Payment methods" subtitle="Configure collection accounts and QR codes. Only one method can be active." action={<Button onClick={()=>{setError('');setEditingMethod('new')}}><Plus size={16}/> Add payment method</Button>}/>
+    <div className="info-banner"><ShieldCheck size={18}/><span>Exactly one payment method should remain active so deposits are routed consistently.</span></div>
+    <DataState loading={loading} error={error} retry={load} empty={!methods.length}>
+      <div className="payment-method-grid">
+        {methods.map(method=><article className={`payment-method ${method.is_active?'method-active':''}`} key={method.id}>
+          <div className="payment-method-head"><span className="upi-mark">UPI</span><Status>{method.is_active?'Active':'Inactive'}</Status></div>
+          <small>COLLECTION UPI ID</small>
+          <strong className="upi-value">{method.upi_id}</strong>
+          <p>{method.payee_name}</p>
+          <small>Created {method.created_at?formatIndiaDateTime(method.created_at):'—'}</small>
+          <div className="qr-box">{method.qr_url?<GameImage src={method.qr_url} alt="Payment QR code" style={{width:88,height:88,objectFit:'contain'}}/>:<span className="qr-mock">▦</span>}<span><strong>{method.qr_url?'Collection QR code':'No QR image'}</strong><small>{method.payee_name}</small></span></div>
+          <div className="table-actions"><Button variant="ghost" onClick={()=>{setError('');setEditingMethod(method)}}>Edit</Button><Button variant={method.is_active?'secondary':'primary'} disabled={method.is_active} onClick={()=>activate(method)}>{method.is_active?'Currently active':'Make active'}</Button></div>
+        </article>)}
+      </div>
+    </DataState>
+    {editingMethod!==null&&<Modal title={isEditing?'Edit payment method':'Add payment method'} onClose={()=>!saving&&setEditingMethod(null)}><form className="form-stack" onSubmit={saveMethod}><FormField label="UPI ID"><input name="upi" type="text" defaultValue={editingMethod?.upi_id||''} placeholder="payments@bank" required maxLength="200" pattern="[^\s@]+@[^\s@]+" title="Enter a valid UPI ID such as payments@bank"/></FormField><FormField label="Payee name"><input name="payee" defaultValue={editingMethod?.payee_name||''} placeholder="Registered business name" required maxLength="200"/></FormField><FormField label="QR image"><input name="qr" type="file" accept="image/jpeg,image/png,image/webp" required={!isEditing}/></FormField><label className="check-field"><input name="isActive" type="checkbox" defaultChecked={Boolean(editingMethod?.is_active)}/> Make active (deactivates the previous method)</label>{error&&<p className="auth-error" role="alert">{error}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={saving} onClick={()=>setEditingMethod(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving?'Saving…':'Save method'}</Button></div></form></Modal>}
+  </>
 }
 
 function UsersAdmin({notify}) {

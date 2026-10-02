@@ -1,6 +1,6 @@
-import { getCurrentUserId } from './userService'
-import { makeId, mockStore, now } from './mockStore'
+import { mockStore, now } from './mockStore'
 import { getPendingDisputeCount } from './adminSettlementService'
+import { apiClient } from './apiClient'
 
 export async function getAdminDashboardSummary() {
   const pendingDisputes = await getPendingDisputeCount()
@@ -18,51 +18,113 @@ export async function getAdminDashboardSummary() {
 }
 
 export async function getAdminDeposits() {
-  return mockStore.deposits.map(deposit => ({ ...deposit, proof_url: deposit.proof_url || null }))
+  const deposits = await getAllAdminPages('/admin/deposits', 'deposits')
+  return deposits.map(deposit => ({
+    id: deposit.transactionId,
+    user_id: deposit.userId,
+    user: { full_name: deposit.userName, phone: deposit.phone },
+    amount: deposit.amount,
+    status: { SUCCESS: 'APPROVED', FAILED: 'REJECTED' }[deposit.status] || deposit.status,
+    created_at: deposit.createdAt,
+    proof_url: deposit.proofUrl,
+    payment_method: { display_name: deposit.upiId || 'Manual UPI', provider: 'manual_upi' },
+  }))
 }
 
-export async function processManualDeposit({ depositId, approve }) {
-  const deposit = mockStore.deposits.find(item => item.id === depositId)
-  if (!deposit) throw new Error('Deposit request could not be found.')
-  if (deposit.status !== 'PENDING') throw new Error('This deposit has already been reviewed.')
-  deposit.status = approve ? 'APPROVED' : 'REJECTED'
-  if (approve) {
-    const userId = deposit.user_id || getCurrentUserId()
-    mockStore.walletBalances.set(userId, (mockStore.walletBalances.get(userId) || 0) + Number(deposit.amount))
-  }
+async function getAllAdminPages(path, key) {
+  const pageSize = 100
+  const firstPage = await apiClient.get(`${path}?page=1&limit=${pageSize}`)
+  const { [key]: firstRows, pagination } = firstPage.data
+  const remainingPages = await Promise.all(
+    Array.from({ length: Math.max(0, pagination.totalPages - 1) }, (_, index) =>
+      apiClient.get(`${path}?page=${index + 2}&limit=${pageSize}`),
+    ),
+  )
+  return [
+    ...firstRows,
+    ...remainingPages.flatMap(response => response.data[key]),
+  ]
 }
 
-export async function getAdminWithdrawals() {
-  return mockStore.payouts.map(row => ({ ...row }))
+export async function processManualDeposit({ depositId, approve, reason = 'Payment proof could not be verified' }) {
+  const action = approve ? 'approve' : 'reject'
+  const response = await apiClient.post(
+    `/admin/deposits/${encodeURIComponent(depositId)}/${action}`,
+    approve ? {} : { reason },
+  )
+  return response.data.deposit
 }
 
-function localImageUrl(file, label) {
-  if (typeof File === 'undefined' || !(file instanceof File) || !file.size) return null
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error(`${label} must be a JPEG, PNG, or WebP image.`)
-  if (file.size > 10 * 1024 * 1024) throw new Error(`${label} must be smaller than 10 MB.`)
-  return URL.createObjectURL(file)
+export async function getAdminDepositProof(proofUrl) {
+  return apiClient.getBlob(proofUrl)
 }
 
 export async function getAdminPaymentMethods() {
-  return mockStore.paymentMethods.map(method => ({ ...method }))
+  const methods = await getAllAdminPages('/admin/payment-methods', 'paymentMethods')
+  return methods.map(method => ({
+    id: method.id,
+    display_name: method.payeeName,
+    provider: 'manual_upi',
+    upi_id: method.upiId,
+    payee_name: method.payeeName,
+    qr_url: method.qrUrl,
+    qr_storage_path: method.qrUrl,
+    is_active: method.status,
+    created_at: method.createdAt,
+  }))
 }
 
 export async function saveAdminPaymentMethod(method) {
-  if (method.isActive) mockStore.paymentMethods.forEach(item => { item.is_active = false })
-  const record = {
-    id: method.id || makeId('PM'), display_name: method.displayName, provider: method.provider,
-    upi_id: method.upiId || null, payee_name: method.payeeName || null,
-    qr_storage_path: method.qrStoragePath || null, qr_url: method.qrStoragePath || null,
-    is_active: Boolean(method.isActive),
+  const upiId = String(method.upiId ?? '').trim()
+  const payeeName = String(method.payeeName ?? '').trim()
+  if (!/^[^\s@]+@[^\s@]+$/.test(upiId)) {
+    throw new Error('Enter a valid UPI ID such as payments@bank.')
   }
-  const existingIndex = mockStore.paymentMethods.findIndex(item => item.id === method.id)
-  if (existingIndex >= 0) mockStore.paymentMethods[existingIndex] = record
-  else mockStore.paymentMethods.push(record)
-  return record.id
+  if (!payeeName) {
+    throw new Error('Payee name is required.')
+  }
+  if (!method.id && !(typeof File !== 'undefined' && method.qrFile instanceof File && method.qrFile.size)) {
+    throw new Error('Upload a QR image when creating a payment method.')
+  }
+
+  const form = new FormData()
+  form.set('upiId', upiId)
+  form.set('payeeName', payeeName)
+  if (method.qrFile instanceof File && method.qrFile.size) form.set('qrImage', method.qrFile)
+
+  const path = method.id
+    ? `/admin/payment-methods/${encodeURIComponent(method.id)}`
+    : '/admin/payment-methods'
+  const response = method.id
+    ? await apiClient.patch(path, form)
+    : await apiClient.post(path, form)
+  const paymentMethod = response.data.paymentMethod
+
+  if (method.isActive) {
+    await apiClient.patch(`/admin/payment-methods/${encodeURIComponent(paymentMethod.id)}/activate`, {})
+  } else if (method.id && method.wasActive) {
+    await apiClient.patch(path, { status: false })
+  }
+
+  return paymentMethod.id
 }
 
-export async function uploadPaymentQr(file) {
-  return localImageUrl(file, 'QR image')
+export async function getAdminWithdrawals() {
+  const withdrawals = await getAllAdminPages('/admin/withdrawals', 'withdrawals')
+  return withdrawals.map(withdrawal => ({
+    id: withdrawal.transactionId,
+    amount: withdrawal.amount,
+    payout_upi_id: withdrawal.upiId,
+    payout_utr: withdrawal.upiTransactionId,
+    status: withdrawal.status,
+    created_at: withdrawal.createdAt,
+    wallet: {
+      user: {
+        full_name: withdrawal.userName || 'Player',
+        phone: withdrawal.phone || '',
+      },
+    },
+  }))
 }
 
 export async function getAdminUsers() {

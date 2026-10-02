@@ -114,7 +114,7 @@ export function MatchPage({notify}) {
       if(payload?.matchId&&payload.matchId!==id)return
       if(event===SOCKET_EVENTS.ROOM_CODE_UPDATED){
         const currentMatch=matchRef.current
-        if(currentMatch?.room_code===payload.roomCode||currentMatch?.room_code)return
+        if(currentMatch?.room_code===payload.roomCode)return
         refreshRevision.current+=1
         if(currentMatch){
           const updatedMatch={...currentMatch,room_code:payload.roomCode}
@@ -204,7 +204,7 @@ export function MatchPage({notify}) {
   const hasRoomCode=Boolean(match.room_code?.trim())
   const canLeave=isOpponent&&!hasRoomCode&&match.status==='in_progress'
   const canCancel=creator&&!opponentJoined&&!hasRoomCode&&match.status==='active'
-  const canSubmitRoom=creator&&opponentJoined&&!hasRoomCode&&match.status==='in_progress'
+  const canSubmitRoom=creator&&opponentJoined&&match.status==='in_progress'
   const isParticipant=creator||isOpponent
   const canClaimResult=isParticipant&&opponentJoined&&match.status==='in_progress'
   const canDisputeResult=isParticipant&&match.status==='completed'
@@ -236,8 +236,8 @@ export function MatchPage({notify}) {
           <div><small>Platform fee</small><strong>{formatINR(Number(match.platform_fee))}</strong></div>
           <div><small>Winner amount</small><strong className="positive-text">{formatINR(Number(match.winner_amount))}</strong></div>
         </div>
-        {hasRoomCode&&<div className="room-code"><div><small>ROOM CODE</small><strong>{match.room_code}</strong></div><CopyButton value={match.room_code} onCopied={()=>notify('Room code copied')}/></div>}
-        {canSubmitRoom&&<form className="form-stack room-code-form" onSubmit={handleRoomCodeSubmit}><FormField label="Room code"><input name="roomCode" maxLength="64" required placeholder="Enter the game room code"/></FormField>{roomError&&<p className="auth-error" role="alert">{roomError}</p>}<Button type="submit" disabled={submitting}>{submitting?'Submitting…':'Share room code'}</Button></form>}
+        <div className="room-code"><div><small>ROOM CODE</small><strong>{hasRoomCode?match.room_code:'Room code not available yet.'}</strong></div>{hasRoomCode&&<CopyButton value={match.room_code} onCopied={()=>notify('Room code copied')}/>}</div>
+        {canSubmitRoom&&<form className="form-stack room-code-form" onSubmit={handleRoomCodeSubmit}><FormField label={hasRoomCode?'Update room code':'Room code'}><input name="roomCode" maxLength="64" defaultValue={match.room_code||''} required placeholder="Enter the game room code"/></FormField>{roomError&&<p className="auth-error" role="alert">{roomError}</p>}<Button type="submit" disabled={submitting}>{submitting?'Submitting…':hasRoomCode?'Update room code':'Share room code'}</Button></form>}
         <div className="match-status-line"><Status>{match.status.replaceAll('_',' ')}</Status><span>Game code: {match.game.slug}</span></div>
         {['completed','disputed','settled','rejected'].includes(match.status)&&<div className="notice"><p>{getResultMessage(match.status,result?.winnerClaimStatus)}</p></div>}
         {canClaimResult&&<Button onClick={()=>{setResultError('');setResultAction('claim')}}>Submit Result</Button>}

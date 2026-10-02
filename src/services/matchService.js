@@ -95,10 +95,10 @@ export async function getMatches(gameId, { page = 1, limit = 10, game: gameDetai
   return result.matches.map(match => toPageMatch(match, game))
 }
 
-export async function createMatch({ gameId, entryAmount }) {
+export async function createMatch({ gameId, entryAmount, clientRequestId }) {
   const result = await requestMatchApi('', {
     method: 'POST',
-    body: { gameId, entryFee: entryAmount },
+    body: { gameId, entryFee: entryAmount, clientRequestId },
   })
 
   return result.match.id

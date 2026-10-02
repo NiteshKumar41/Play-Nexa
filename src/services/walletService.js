@@ -1,13 +1,7 @@
 import { apiClient } from './apiClient'
-import { player } from '../data/users'
 import { TRANSACTION_STATUS } from '../constants/transactionStatus'
 import { TRANSACTION_TYPE } from '../constants/transactionTypes'
 import { makeId, mockStore, now } from './mockStore'
-import { getCurrentUserId } from './userService'
-
-function currentUserId() {
-  return getCurrentUserId() || player.id
-}
 
 // Both reads use the JWT identity; the browser never chooses a wallet user ID.
 export async function getWallet() {
@@ -27,35 +21,29 @@ function addTransaction(type, amount, description, status = TRANSACTION_STATUS.C
   })
 }
 
-export async function createWithdrawal({ amount, upiId }) {
-  const userId = currentUserId()
-  const value = Number(amount)
-  const balance = mockStore.walletBalances.get(userId) ?? 0
-  if (!(value > 0) || value > balance) throw new Error('Enter an amount within your available balance.')
-  mockStore.walletBalances.set(userId, balance - value)
-  const id = makeId('PO')
-  mockStore.payouts.unshift({
-    id, amount: value, payout_upi_id: upiId, status: TRANSACTION_STATUS.INITIATED, created_at: now(),
-    wallet: { user: mockStore.users.find(user => user.id === userId) },
+export async function createWithdrawal({ amount, upiId, clientRequestId = crypto.randomUUID() }) {
+  const response = await apiClient.post('/wallet/withdrawals', {
+    amount: String(amount),
+    upiId,
+    clientRequestId,
   })
-  addTransaction(TRANSACTION_TYPE.WITHDRAW, value, 'Withdrawal request', TRANSACTION_STATUS.INITIATED)
-  return id
+  return response.data
 }
 
-export async function approveWithdrawal({ withdrawalId, utr, payoutTransactionId }) {
-  const payout = mockStore.payouts.find(row => row.id === withdrawalId)
-  if (!payout) throw new Error('Withdrawal could not be found.')
-  payout.status = TRANSACTION_STATUS.SUCCESS
-  payout.payout_utr = utr
-  payout.payout_transaction_id = payoutTransactionId
+export async function approveWithdrawal({ withdrawalId, utr, remarks }) {
+  const response = await apiClient.post(
+    `/admin/withdrawals/${encodeURIComponent(withdrawalId)}/success`,
+    { upiTransactionId: utr, remarks },
+  )
+  return response.data.withdrawal
 }
 
-export async function rejectWithdrawal(withdrawalId) {
-  const payout = mockStore.payouts.find(row => row.id === withdrawalId)
-  if (!payout) throw new Error('Withdrawal could not be found.')
-  payout.status = TRANSACTION_STATUS.FAILED
-  const userId = payout.wallet?.user?.id
-  if (userId) mockStore.walletBalances.set(userId, (mockStore.walletBalances.get(userId) || 0) + Number(payout.amount))
+export async function rejectWithdrawal(withdrawalId, reason = 'Withdrawal rejected by administrator') {
+  const response = await apiClient.post(
+    `/admin/withdrawals/${encodeURIComponent(withdrawalId)}/reject`,
+    { reason },
+  )
+  return response.data.withdrawal
 }
 
 export async function debitWallet({ userId, amount, description = 'Match entry' }) {

@@ -1,7 +1,9 @@
 import { getCurrentUserId } from './userService'
 import { makeId, mockStore, now } from './mockStore'
+import { getPendingDisputeCount } from './adminSettlementService'
 
 export async function getAdminDashboardSummary() {
+  const pendingDisputes = await getPendingDisputeCount()
   return {
     deposits_total: 18500,
     withdrawals_total: 8500,
@@ -9,7 +11,7 @@ export async function getAdminDashboardSummary() {
     platform_earnings: 6240,
     pending_deposits: mockStore.deposits.filter(item => item.status === 'PENDING').reduce((sum, item) => sum + Number(item.amount), 0),
     pending_withdrawals: mockStore.payouts.filter(item => item.status === 'INITIATED').reduce((sum, item) => sum + Number(item.amount), 0),
-    pending_disputes: mockStore.settlementMatches.filter(item => item.status === 'DISPUTED').length,
+    pending_disputes: pendingDisputes,
     players: mockStore.users.length,
     pending_tickets: mockStore.supportTickets.filter(item => item.status === 'OPEN' || item.status === 'IN_PROGRESS').length,
   }
@@ -34,32 +36,11 @@ export async function getAdminWithdrawals() {
   return mockStore.payouts.map(row => ({ ...row }))
 }
 
-export async function getAdminGames() {
-  return mockStore.games.map(game => ({ ...game }))
-}
-
-export async function saveAdminGame(game) {
-  const record = {
-    id: game.id || makeId('GAME'), slug: game.slug, name: game.name, category: game.category,
-    minimum_entry: Number(game.minimumEntry), maximum_entry: game.maximumEntry,
-    is_active: Boolean(game.isActive), is_open: Boolean(game.isOpen), image_url: game.imageUrl || null,
-    players: 0, symbol: '🎮', theme: 'carrom', entry: Number(game.minimumEntry),
-  }
-  const existingIndex = mockStore.games.findIndex(item => item.id === game.id)
-  if (existingIndex >= 0) mockStore.games[existingIndex] = { ...mockStore.games[existingIndex], ...record }
-  else mockStore.games.push(record)
-  return record.id
-}
-
 function localImageUrl(file, label) {
   if (typeof File === 'undefined' || !(file instanceof File) || !file.size) return null
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error(`${label} must be a JPEG, PNG, or WebP image.`)
   if (file.size > 10 * 1024 * 1024) throw new Error(`${label} must be smaller than 10 MB.`)
   return URL.createObjectURL(file)
-}
-
-export async function uploadGameImage(file) {
-  return localImageUrl(file, 'Game image')
 }
 
 export async function getAdminPaymentMethods() {

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { Button, ConfirmModal, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common';
 import { useAuth } from '../../hooks/useAuth';
-import { formatINR, games } from '../../data/mockData';
-import { getPlayableGames } from '../../services/gameService';
-import { createMatch as createMatchRequest, getOpenMatches, joinMatch as joinMatchRequest, subscribeToLobby } from '../../services/matchService';
+import { formatINR } from '../../utils/currency';
+import { getGameByCode, getGames } from '../../services/gameService';
+import { createMatch as createMatchRequest, getMatches, joinMatch as joinMatchRequest, subscribeToLobby } from '../../services/matchService';
+import { SOCKET_EVENTS } from '../../services/socketService';
 import { GameTile } from '../../components/games/GameCard'
+import { GameImage } from '../../components/games/GameImage'
 
 export function GamesPage() {
   const [filter, setFilter] = useState('All games')
@@ -19,7 +21,8 @@ export function GamesPage() {
     setError('')
 
     try {
-      setGames(await getPlayableGames())
+      const activeGames = await getGames()
+      setGames(activeGames.filter(game => game.is_active))
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load games.')
     } finally {
@@ -38,10 +41,12 @@ export function GamesPage() {
     }
   }, [loadGames])
 
-  const availableCategories = ['All games', ...new Set(games.map(game => game.category))]
-  const visibleGames = filter === 'All games'
-    ? games
-    : games.filter(game => game.category === filter)
+  const availableCategories = ['All games', 'Matchmaking open', 'Matchmaking closed']
+  const visibleGames = filter === 'Matchmaking open'
+    ? games.filter(game => game.is_open)
+    : filter === 'Matchmaking closed'
+      ? games.filter(game => !game.is_open)
+      : games
 
   return (
     <>
@@ -83,19 +88,27 @@ export function Lobby({ notify }) {
   const [confirm,setConfirm]=useState(null)
   const [submitting,setSubmitting]=useState(false)
   const navigate=useNavigate()
+  const gameRef=useRef(game)
+  const notifyRef=useRef(notify)
+  const lobbyLoadRevision=useRef(0)
+  useEffect(()=>{gameRef.current=game},[game])
+  useEffect(()=>{notifyRef.current=notify},[notify])
   const loadLobby=useCallback(async()=>{
+    const requestRevision=++lobbyLoadRevision.current
     setLoading(true)
     setError('')
     try{
-      const availableGames=await getPlayableGames()
-      const currentGame=availableGames.find(item=>item.slug===gameCode)
-      if(!currentGame)throw new Error('This game is not currently open for matchmaking.')
+      const currentGame=await getGameByCode(gameCode)
+      if(requestRevision!==lobbyLoadRevision.current)return
       setGame(currentGame)
-      setOpenMatches(await getOpenMatches(currentGame.id))
+      const matches=currentGame.is_open?await getMatches(currentGame.id,{game:currentGame}):[]
+      if(requestRevision!==lobbyLoadRevision.current)return
+      setOpenMatches(matches)
     }catch(loadError){
+      if(requestRevision!==lobbyLoadRevision.current)return
       setError(loadError instanceof Error?loadError.message:'Unable to load this game lobby.')
     }finally{
-      setLoading(false)
+      if(requestRevision===lobbyLoadRevision.current)setLoading(false)
     }
   },[gameCode])
   useEffect(()=>{
@@ -104,11 +117,45 @@ export function Lobby({ notify }) {
     return()=>{cancelled=true}
   },[loadLobby])
   useEffect(()=>{
-    if(!game?.id)return undefined
-    return subscribeToLobby(game.id,change=>{
-      if(change.event==='INSERT'||change.event==='UPDATE')void loadLobby()
+    const currentGame=gameRef.current
+    if(!currentGame?.id||!currentGame.is_open)return undefined
+    function handleLobbyEvent(event,payload){
+      if(!payload?.matchId)return
+      lobbyLoadRevision.current+=1
+
+      if(event===SOCKET_EVENTS.MATCH_CREATED){
+        const created=payload.match
+        if(!created||String(created.gameCode)!==String(currentGame.gameCode))return
+        setOpenMatches(current=>current.some(match=>match.id===payload.matchId)?current:[{
+          id:payload.matchId,
+          game_id:currentGame.id,
+          game:{id:currentGame.id,name:currentGame.name,slug:currentGame.slug,image_url:currentGame.image_url},
+          host_user_id:created.player1,
+          opponent_user_id:null,
+          entry_amount:Number(created.player1Amount),
+          prize_pool:Number(created.prizePool),
+          status:'active',
+        },...current])
+        return
+      }
+
+      if(event===SOCKET_EVENTS.MATCH_JOINED||event===SOCKET_EVENTS.MATCH_CANCELLED){
+        setOpenMatches(current=>current.filter(match=>match.id!==payload.matchId))
+        return
+      }
+
+      if(event===SOCKET_EVENTS.MATCH_PLAYER_LEFT)void loadLobby()
+    }
+    const unsubscribe=subscribeToLobby(currentGame.id,handleLobbyEvent,message=>{
+      notifyRef.current(message)
     })
-  },[game?.id,loadLobby])
+    let active=true
+    queueMicrotask(()=>{if(active)void loadLobby()})
+    return ()=>{
+      active=false
+      unsubscribe()
+    }
+  },[game?.id,game?.gameCode,game?.slug,game?.image_url,game?.is_open,game?.name,loadLobby])
   async function createMatch(entry){
     setSubmitting(true)
     try{
@@ -127,7 +174,7 @@ export function Lobby({ notify }) {
     setSubmitting(true)
     try{
       const matchId=confirm.id
-      await joinMatchRequest({matchId})
+      await joinMatchRequest(matchId)
       setConfirm(null)
       notify('Match joined successfully.')
       navigate(`/match/${matchId}`)
@@ -139,7 +186,6 @@ export function Lobby({ notify }) {
       setSubmitting(false)
     }
   }
-  const fallback=game&&games.find(item=>item.id===game.slug)
   const rows=openMatches.map(match=>({
     id:match.id,
     game:match.game.name,
@@ -155,18 +201,18 @@ export function Lobby({ notify }) {
         eyebrow="OPEN MATCHES"
         title={game ? `${game.name} lobby` : 'Game lobby'}
         subtitle="Find a player and get into the game."
-        action={game && <Button onClick={() => setModal(true)}><Plus size={16}/> Create match</Button>}
+        action={game?.is_open && <Button onClick={() => setModal(true)}><Plus size={16}/> Create match</Button>}
       />
       {game && (
         <div className="lobby-hero">
-          <div className={`lobby-badge ${fallback?.theme || ''}`}>
-            {game.image_url ? <img src={game.image_url} alt="" /> : fallback?.symbol || '🎮'}
+          <div className="lobby-badge">
+            {game.image_url ? <GameImage src={game.imageUrl || game.image_url} alt="" fallback="🎮" /> : '🎮'}
           </div>
           <div className="lobby-hero-copy">
             <h2>{game.name}</h2>
-            <p>Game code: {game.slug} · Entry from {formatINR(Number(game.minimum_entry) || 50)}</p>
+            <p>Game code: {game.slug}</p>
           </div>
-          <Status>Open</Status>
+          <Status>{game.is_open?'Open':'Closed to new matches'}</Status>
         </div>
       )}
       <DataState loading={loading} error={error} retry={loadLobby} empty={!rows.length}>

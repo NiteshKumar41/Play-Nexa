@@ -61,8 +61,8 @@ export function AuthPage({ mode, onSuccess }) {
         });
 
         if (!result.session) {
-          setIsSent(true);
-          setSentMessage('Check your email for a confirmation link to finish creating your account.');
+          onSuccess?.('Your account was created. Please sign in.');
+          navigate('/login', { replace: true });
           return;
         }
 

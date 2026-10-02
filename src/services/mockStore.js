@@ -1,4 +1,4 @@
-import { mockMatches, settlementMatches } from '../data/matches'
+import { mockMatches } from '../data/matches'
 import { games as gameRecords } from '../data/games'
 import { paymentMethods } from '../data/admin'
 import { deposits, payouts, transactions } from '../data/transactions'
@@ -13,7 +13,6 @@ export const mockStore = {
   users: users.map(user => ({ ...user })),
   games: gameRecords.map(game => ({ ...game })),
   matches: mockMatches.map(match => ({ ...match })),
-  settlementMatches: settlementMatches.map(match => ({ ...match })),
   deposits: deposits.map(deposit => ({ ...deposit })),
   payouts: payouts.map(payout => ({ ...payout })),
   paymentMethods: paymentMethods.map(method => ({ ...method })),

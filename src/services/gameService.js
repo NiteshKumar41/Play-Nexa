@@ -1,48 +1,59 @@
-import { mockStore } from './mockStore'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1'
-const TOKEN_KEY = 'playnexa.auth-token'
+import { apiClient } from './apiClient'
+import { getAuthToken } from './tokenStorage'
+import { API_BASE_URL } from '../config/api'
 
 async function requestGameApi(path, { method = 'GET', body, requiresAdmin = false } = {}) {
-  const headers = {}
-  const token = localStorage.getItem(TOKEN_KEY)
-
-  if (token) headers.Authorization = `Bearer ${token}`
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const token = getAuthToken()
   if (requiresAdmin && !token) throw new Error('Admin authentication is required.')
 
-  const response = await fetch(`${API_BASE_URL}/games${path}`, {
+  const response = await apiClient.request(`/games${path}`, {
     method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body,
   })
-  const result = await response.json()
-
-  if (!response.ok) {
-    const error = new Error(result.message || 'Game request failed.')
-    error.status = response.status
-    throw error
-  }
-
-  return result.data
+  return response.data
 }
 
-export async function getPlayableGames() {
-  return mockStore.games.filter(game => game.is_active && game.is_open)
+export function getGameImageSource(imageUrl) {
+  if (!imageUrl) return ''
+  if (/^https?:\/\//i.test(imageUrl)) return imageUrl
+  return `${API_BASE_URL}${imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`}`
+}
+
+export async function loadGameImage(imageUrl) {
+  return apiClient.getBlob(getGameImageSource(imageUrl))
+}
+
+function toPlayerGame(game) {
+  return {
+    ...game,
+    slug: String(game.gameCode),
+    image_url: getGameImageSource(game.imageUrl),
+    is_active: game.isActive,
+    is_open: game.isOpen,
+  }
 }
 
 export async function getGames() {
   const result = await requestGameApi('')
-  return result.games
+  return result.games.map(toPlayerGame)
+}
+
+// The backend has no lookup-by-gameCode route; public list items include code.
+export async function getGameByCode(gameCode) {
+  const games = await getGames()
+  const game = games.find(item => item.slug === String(gameCode))
+  if (!game) throw new Error('This game is not currently available.')
+  return game
 }
 
 export async function getGameById(gameId) {
   const result = await requestGameApi(`/${encodeURIComponent(gameId)}`)
-  return result.game
+  return toPlayerGame(result.game)
 }
 
-export async function getAdminGames() {
-  const result = await requestGameApi('/admin', { requiresAdmin: true })
+export async function getAdminGames({ page = 1, limit = 100 } = {}) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) })
+  const result = await requestGameApi(`/admin?${query}`, { requiresAdmin: true })
   return result.games
 }
 

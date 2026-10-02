@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Search, ShieldCheck, Wallet, Swords, CircleHelp } from 'lucide-react'
 import { Button, ConfirmModal, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common'
 import { formatINR } from '../../data/mockData'
-import { declareMatchWinner, getSettlementQueue, refundMatchPlayers, rejectMatchWinnerClaim } from '../../services/matchService'
+import { declareWinner, getPendingSettlements, getSettlement, refundBothPlayers, rejectWinnerClaim, releaseSettlementEvidence } from '../../services/adminSettlementService'
 import { getAdminSupportTickets, updateSupportTicket } from '../../services/supportService'
-import { getAdminDashboardSummary, getAdminDeposits, getAdminGames, getAdminPaymentMethods, getAdminUsers, getAdminWithdrawals, processManualDeposit, saveAdminGame, saveAdminPaymentMethod, updateAdminUser, uploadGameImage, uploadPaymentQr } from '../../services/adminService'
+import { getAdminDashboardSummary, getAdminDeposits, getAdminPaymentMethods, getAdminUsers, getAdminWithdrawals, processManualDeposit, saveAdminPaymentMethod, updateAdminUser, uploadPaymentQr } from '../../services/adminService'
+import { createGame, getAdminGames, toggleGameOpenStatus, toggleGameStatus, updateGame } from '../../services/gameService'
+import { GameImage } from '../../components/games/GameImage'
 import { approveWithdrawal, rejectWithdrawal } from '../../services/walletService'
+import { formatIndiaDateTime } from '../../utils/formatDate'
 
 export function AdminPage({section,notify}) {
   if(section==='summary') return <AdminSummary/>
@@ -56,16 +59,20 @@ function Payouts({notify}) {
 
 function Settlements({notify}) {
   const [decision,setDecision]=useState(null)
-  const [screens,setScreens]=useState(null)
+  const [selectedMatchId,setSelectedMatchId]=useState('')
+  const [settlementDetail,setSettlementDetail]=useState(null)
+  const [detailLoading,setDetailLoading]=useState(false)
+  const [detailError,setDetailError]=useState('')
   const [rows,setRows]=useState([])
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
   const [decisionError,setDecisionError]=useState('')
+  const detailRevision=useRef(0)
   const loadQueue=useCallback(async()=>{
     setLoading(true)
     setError('')
-    try{setRows(await getSettlementQueue())}
+    try{setRows(await getPendingSettlements())}
     catch(queueError){setError(queueError instanceof Error?queueError.message:'Unable to load match settlements.')}
     finally{setLoading(false)}
   },[])
@@ -74,21 +81,56 @@ function Settlements({notify}) {
     queueMicrotask(()=>{if(!cancelled)loadQueue()})
     return()=>{cancelled=true}
   },[loadQueue])
+  useEffect(()=>()=>releaseSettlementEvidence(settlementDetail),[settlementDetail])
+  const loadDetail=useCallback(async()=>{
+    if(!selectedMatchId)return
+    const revision=++detailRevision.current
+    setDetailLoading(true)
+    setDetailError('')
+    try{
+      const detail=await getSettlement(selectedMatchId)
+      if(revision===detailRevision.current)setSettlementDetail(detail)
+      else releaseSettlementEvidence(detail)
+    }catch(detailLoadError){
+      if(revision===detailRevision.current)setDetailError(detailLoadError instanceof Error?detailLoadError.message:'Unable to load settlement details.')
+    }finally{
+      if(revision===detailRevision.current)setDetailLoading(false)
+    }
+  },[selectedMatchId])
+  useEffect(()=>{
+    if(selectedMatchId)queueMicrotask(loadDetail)
+  },[loadDetail,selectedMatchId])
+  function closeDetail(){
+    detailRevision.current+=1
+    setSelectedMatchId('')
+    setSettlementDetail(null)
+    setDetailError('')
+  }
   async function completeDecision(event){
     event?.preventDefault()
     if(!decision)return
     setBusy(true)
     setDecisionError('')
     try{
+      let response
       if(decision.action==='Declare Winner'){
         const winnerUserId=new FormData(event.currentTarget).get('winnerUserId')
-        await declareMatchWinner({matchId:decision.row.id,winnerUserId})
+        response=await declareWinner(decision.row.id,winnerUserId)
       }else if(decision.action==='Refund Both'){
-        await refundMatchPlayers(decision.row.id)
+        response=await refundBothPlayers(decision.row.id)
       }else{
-        await rejectMatchWinnerClaim(decision.row.id)
+        const reason=String(new FormData(event.currentTarget).get('reason')||'').trim()
+        if(reason.length<5||reason.length>500){
+          setDecisionError('Enter a rejection reason between 5 and 500 characters.')
+          setBusy(false)
+          return
+        }
+        response=await rejectWinnerClaim(decision.row.id,reason)
       }
-      notify(`${decision.action} completed for match ${decision.row.id.slice(0,8)}.`)
+      const payoutMessage=decision.action==='Declare Winner'&&response.data?.winnerAmount!==undefined
+        ?` Winner payout ${formatINR(Number(response.data.winnerAmount))}; platform fee ${formatINR(Number(response.data.platformFee))}.`
+        :''
+      notify(`${response.message||`${decision.action} completed for match ${decision.row.id.slice(0,8)}.`}${payoutMessage}`)
       setDecision(null)
       await loadQueue()
     }catch(actionError){
@@ -97,41 +139,88 @@ function Settlements({notify}) {
       setBusy(false)
     }
   }
-  function playerLabel(userId,label){
-    return userId?`${label} · ${userId.slice(0,8)}`:'Not joined'
+  function playerLabel(player,label){
+    return player?`${label}: ${player.name} · ${player.id.slice(0,8)}`:`${label}: Not joined`
+  }
+  function claimLabel(row){
+    if(!row.winnerClaimedBy)return 'No claim'
+    const claimant=row.player1?.id===row.winnerClaimedBy?row.player1:row.player2
+    return claimant?.name||row.winnerClaimedBy.slice(0,8)
+  }
+  function eligibleWinners(row){
+    const players=[row.player1,row.player2].filter(Boolean)
+    return row.status==='DISPUTED'
+      ?players
+      :players.filter(player=>player.id===row.winnerClaimedBy)
   }
   return <>
     <PageTitle eyebrow="MATCH OPERATIONS" title="Settlements" subtitle="Review winner claims, screenshots, and match disputes."/>
     <Panel className="admin-table-settlements" title="Match settlements" subtitle="Review claims and resolve matches atomically">
       <DataState loading={loading} error={error} retry={loadQueue} empty={!rows.length}>
-        <div className="table-wrap"><table><thead><tr><th>Match</th><th>Players</th><th>Entry</th><th>Winner amount</th><th>Winner claim</th><th>Evidence</th><th>Status</th><th>Actions</th></tr></thead><tbody>{rows.map(row=><tr key={row.id}>
+        <div className="table-wrap"><table><thead><tr><th>Match</th><th>Players</th><th>Entry</th><th>Prize pool</th><th>Winner claim</th><th>Evidence</th><th>Status</th><th>Actions</th></tr></thead><tbody>{rows.map(row=><tr key={row.id}>
           <td><strong>{row.game?.name||'Match'}</strong><small>{row.id.slice(0,8)}</small></td>
-          <td><small>{playerLabel(row.host_user_id,'Player 1')}</small><small>{playerLabel(row.opponent_user_id,'Player 2')}</small></td>
-          <td>{formatINR(Number(row.entry_amount))}</td><td>{formatINR(Number(row.winner_amount))}</td>
-          <td>{row.winner_claimed_by?row.winner_claimed_by.slice(0,8):'No claim'}<small>{row.winner_claim_status||''}</small></td>
-          <td><button className="text-link" onClick={()=>setScreens(row)}>View evidence</button></td>
+          <td><small>{playerLabel(row.player1,'Player 1')}</small><small>{playerLabel(row.player2,'Player 2')}</small></td>
+          <td>{formatINR(Number(row.player1?.amount||0))}</td><td>{formatINR(Number(row.prizePool||0))}</td>
+          <td>{claimLabel(row)}<small>{row.winnerClaimStatus||''}</small></td>
+          <td><button className="text-link" type="button" onClick={()=>{setSettlementDetail(null);setSelectedMatchId(row.id)}}>View evidence</button></td>
           <td><Status>{row.status}</Status></td>
           <td><div className="table-actions">
-            {row.winner_claim_status==='PENDING'&&<Button variant="success" onClick={()=>{setDecisionError('');setDecision({row,action:'Declare Winner'})}}>Declare winner</Button>}
-            {['completed','disputed','under_review'].includes(row.status)&&row.opponent_user_id&&<Button variant="secondary" onClick={()=>{setDecisionError('');setDecision({row,action:'Refund Both'})}}>Refund both</Button>}
-            {row.winner_claim_status==='PENDING'&&<Button variant="danger-outline" onClick={()=>{setDecisionError('');setDecision({row,action:'Reject Claim'})}}>Reject claim</Button>}
+            {row.winnerClaimStatus==='PENDING'&&<Button variant="success" onClick={()=>{setDecisionError('');setDecision({row,action:'Declare Winner'})}}>Declare winner</Button>}
+            {['COMPLETED','DISPUTED'].includes(row.status)&&row.player2&&<Button variant="secondary" onClick={()=>{setDecisionError('');setDecision({row,action:'Refund Both'})}}>Refund both</Button>}
+            {row.winnerClaimStatus==='PENDING'&&<Button variant="danger-outline" onClick={()=>{setDecisionError('');setDecision({row,action:'Reject Claim'})}}>Reject claim</Button>}
           </div></td>
         </tr>)}</tbody></table></div>
       </DataState>
     </Panel>
     {decision&&<Modal title={`${decision.action}?`} onClose={()=>!busy&&setDecision(null)}>
       <form className="form-stack" onSubmit={completeDecision}>
-        <p>{decision.action} for match {decision.row.id.slice(0,8)}?</p>
-        {decision.action==='Declare Winner'&&<FormField label="Select winner"><select name="winnerUserId" defaultValue={decision.row.winner_claimed_by||decision.row.host_user_id}><option value={decision.row.host_user_id}>{playerLabel(decision.row.host_user_id,'Player 1')}</option><option value={decision.row.opponent_user_id}>{playerLabel(decision.row.opponent_user_id,'Player 2')}</option></select></FormField>}
+        {decision.action==='Declare Winner'&&<p>Choose the match winner. The backend will calculate the final fee and wallet payout.</p>}
+        {decision.action==='Refund Both'&&<p>Refund each player’s original entry amount and cancel this match.</p>}
+        {decision.action==='Reject Claim'&&<p>Rejecting this claim will refund both players’ original entry amounts and cancel this match.</p>}
+        {decision.action==='Declare Winner'&&<FormField label="Select winner"><select name="winnerUserId" required defaultValue={decision.row.winnerClaimedBy}>{eligibleWinners(decision.row).map(player=><option key={player.id} value={player.id}>{playerLabel(player,player.id===decision.row.player1.id?'Player 1':'Player 2')}</option>)}</select></FormField>}
+        {decision.action==='Reject Claim'&&<FormField label="Rejection reason" hint="Enter between 5 and 500 characters."><textarea name="reason" rows="3" minLength="5" maxLength="500" required/></FormField>}
         {decisionError&&<p className="auth-error" role="alert">{decisionError}</p>}
         <div className="modal-actions"><Button variant="secondary" type="button" disabled={busy} onClick={()=>setDecision(null)}>Cancel</Button><Button variant={decision.action==='Reject Claim'?'danger':'primary'} type="submit" disabled={busy}>{busy?'Processing…':decision.action}</Button></div>
       </form>
     </Modal>}
-    {screens&&<Modal title={`Match evidence · ${screens.id.slice(0,8)}`} onClose={()=>setScreens(null)}><div className="form-stack">
-      {screens.winner_claimed_by&&<><strong>Winner claim · {screens.winner_claim_status}</strong><small>Submitted by {screens.winner_claimed_by}</small>{screens.winner_claim_image_url&&<img src={screens.winner_claim_image_url} alt="Winner claim screenshot" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/>}</>}
-      {screens.dispute_reason&&<><strong>Dispute</strong><p>{screens.dispute_reason}</p>{screens.dispute_screenshot_url&&<img src={screens.dispute_screenshot_url} alt="Dispute screenshot" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/>}</>}
-      <div className="modal-actions"><Button variant="secondary" onClick={()=>setScreens(null)}>Close</Button></div>
-    </div></Modal>}
+    {selectedMatchId&&<Modal title={`Settlement details · ${selectedMatchId.slice(0,8)}`} onClose={closeDetail}>
+      <DataState loading={detailLoading} error={detailError} retry={loadDetail} empty={false}>
+        {settlementDetail&&(()=>{
+          const match=settlementDetail.match
+          const player1=match.player1
+          const player2=match.player2
+          const claimant=player1?.id===match.winnerClaimedBy?player1:player2
+          const disputer=player1?.id===match.disputeClaimedBy?player1:player2
+          return <div className="form-stack">
+            <div className="match-status-line"><Status>{match.status}</Status><span>{match.game?.name||'Match'}</span></div>
+            <p><strong>Match ID:</strong> {match.id}</p>
+            <p><strong>Player 1:</strong> {player1?.name||'—'} · {player1?.phone||'—'} · {formatINR(Number(player1?.amount||0))}</p>
+            <p><strong>Player 2:</strong> {player2?.name||'—'} · {player2?.phone||'—'} · {player2?formatINR(Number(player2.amount)): 'Not joined'}</p>
+            <div className="financial-grid">
+              <div><small>Prize pool</small><strong>{formatINR(Number(match.financials.prizePool||0))}</strong></div>
+              <div><small>Platform fee</small><strong>{formatINR(Number(match.financials.platformFee||0))}</strong></div>
+              <div><small>Winner amount</small><strong>{formatINR(Number(match.financials.winnerAmount||0))}</strong></div>
+              {match.financials.refundAmountPerPlayer!==null&&<div><small>Refund per player</small><strong>{formatINR(Number(match.financials.refundAmountPerPlayer))}</strong></div>}
+            </div>
+            <p><strong>Room code:</strong> {match.roomCode||'Not set'}</p>
+            <p><strong>Winner claim:</strong> {claimant?.name||'No claimant'} · {match.winnerClaimStatus||'—'}</p>
+            {match.winnerClaimRemarks&&<p><strong>Claim remarks:</strong> {match.winnerClaimRemarks}</p>}
+            <p><strong>Winner:</strong> {match.winnerPlayer?.name||'Not settled'}</p>
+            <p><strong>Disputer:</strong> {disputer?.name||'—'}</p>
+            {match.disputeReason&&<p><strong>Dispute reason:</strong> {match.disputeReason}</p>}
+            <p><strong>Created:</strong> {formatIndiaDateTime(match.createdAt)}</p>
+            <p><strong>Players joined:</strong> {match.joinedAt?formatIndiaDateTime(match.joinedAt):'—'}</p>
+            {match.completedAt&&<p><strong>Completed:</strong> {formatIndiaDateTime(match.completedAt)}</p>}
+            {match.settlement.settledAt&&<p><strong>Finalized:</strong> {formatIndiaDateTime(match.settlement.settledAt)} · by {match.settlement.settledBy?.name||'admin'}</p>}
+            {match.settlement.settlementReason&&<p><strong>Settlement note:</strong> {match.settlement.settlementReason}</p>}
+            {match.player1ScreenshotUrl&&<div><small>Player 1 screenshot</small><img src={match.player1ScreenshotUrl} alt="Player 1 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
+            {match.player2ScreenshotUrl&&<div><small>Player 2 screenshot</small><img src={match.player2ScreenshotUrl} alt="Player 2 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
+            {settlementDetail.walletTransactions.length>0&&<div className="form-stack"><strong>Wallet transactions</strong>{settlementDetail.walletTransactions.map(transaction=><p key={transaction.id}>{transaction.transactionType} · {formatINR(Number(transaction.amount))} · {transaction.status} · {transaction.id.slice(0,8)}</p>)}</div>}
+            <div className="modal-actions"><Button variant="secondary" onClick={closeDetail}>Close</Button></div>
+          </div>
+        })()}
+      </DataState>
+    </Modal>}
   </>
 }
 
@@ -142,19 +231,25 @@ function GamesAdmin({notify}) {
   async function saveGame(event){
     event.preventDefault();setSaving(true);setError('')
     try{
-      const form=new FormData(event.currentTarget),name=String(form.get('name')).trim(),image=form.get('image')
-      const slug=String(form.get('slug')||name).trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
-      const imageUrl=image instanceof File&&image.size?await uploadGameImage(image):editing==='new'?null:editing.image_url
-      await saveAdminGame({id:editing==='new'?null:editing.id,slug,name,category:form.get('category'),minimumEntry:Number(form.get('minimumEntry')),maximumEntry:form.get('maximumEntry')?Number(form.get('maximumEntry')):null,isActive:form.get('isActive')==='on',isOpen:form.get('isOpen')==='on',imageUrl})
+      const form=new FormData(event.currentTarget)
+      const gameData={gameCode:Number(form.get('gameCode')),name:String(form.get('name')).trim(),imageUrl:String(form.get('imageUrl')||'').trim(),isActive:form.get('isActive')==='on',isOpen:form.get('isOpen')==='on'}
+      if(!gameData.imageUrl&&editing==='new')delete gameData.imageUrl
+      if(editing==='new')await createGame(gameData)
+      else await updateGame(editing.id,gameData)
       notify(`Game ${editing==='new'?'added':'updated'}.`);setEditing(null);await load()
     }catch(saveError){setError(saveError instanceof Error?saveError.message:'Unable to save game.')}
     finally{setSaving(false)}
   }
   async function toggleGame(game,key){
-    try{await saveAdminGame({id:game.id,slug:game.slug,name:game.name,category:game.category,minimumEntry:Number(game.minimum_entry),maximumEntry:game.maximum_entry,isActive:key==='active'?!game.is_active:game.is_active,isOpen:key==='open'?!game.is_open:game.is_open,imageUrl:game.image_url});notify(`${game.name} availability updated.`);await load()}
+    setError('')
+    try{
+      if(key==='active')await toggleGameStatus(game.id,!game.isActive)
+      else await toggleGameOpenStatus(game.id,!game.isOpen)
+      notify(`${game.name} availability updated.`);await load()
+    }
     catch(toggleError){setError(toggleError instanceof Error?toggleError.message:'Unable to update game.')}
   }
-  return <><PageTitle eyebrow="CATALOG MANAGEMENT" title="Games" subtitle="Manage the games available to players." action={<Button onClick={()=>setEditing('new')}><Plus size={16}/> Add game</Button>}/><Panel title="Game catalog" subtitle="Edit listing details or switch game availability."><DataState loading={loading} error={error} retry={load} empty={!rows.length}><div className="admin-game-list">{rows.map(game=><article className="admin-game-row" key={game.id}>{game.image_url?<img className="game-mini" src={game.image_url} alt=""/>:<div className="game-mini">🎮</div>}<div className="row-grow"><strong>{game.name}</strong><small>{game.category} · Entry from {formatINR(Number(game.minimum_entry))}{game.maximum_entry?` to ${formatINR(Number(game.maximum_entry))}`:''} · {game.slug}</small></div><Status>{game.is_active?'Active':'Inactive'}</Status><Button variant="ghost" onClick={()=>setEditing(game)}>Edit</Button><Button variant="secondary" onClick={()=>toggleGame(game,'active')}>{game.is_active?'Deactivate':'Activate'}</Button><Button variant="secondary" onClick={()=>toggleGame(game,'open')}>{game.is_open?'Close lobby':'Open lobby'}</Button></article>)}</div></DataState></Panel>{editing&&<Modal title={editing==='new'?'Add a game':`Edit ${editing.name}`} onClose={()=>!saving&&setEditing(null)}><form className="form-stack" onSubmit={saveGame}><FormField label="Game name"><input name="name" required maxLength="120" defaultValue={editing==='new'?'':editing.name} placeholder="e.g. Table Tennis"/></FormField><FormField label="Game code"><input name="slug" defaultValue={editing==='new'?'':editing.slug} placeholder="Generated from name if blank" pattern="[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*"/></FormField><FormField label="Category"><input name="category" required maxLength="80" defaultValue={editing==='new'?'':editing.category}/></FormField><FormField label="Minimum entry fee"><input name="minimumEntry" type="number" min="0" step="0.01" required defaultValue={editing==='new'?'':editing.minimum_entry}/></FormField><FormField label="Maximum entry fee"><input name="maximumEntry" type="number" min="0" step="0.01" defaultValue={editing==='new'?'':editing.maximum_entry||''}/></FormField><FormField label="Game image"><input name="image" type="file" accept="image/jpeg,image/png,image/webp"/></FormField><label className="check-field"><input name="isActive" type="checkbox" defaultChecked={editing==='new'||editing.is_active}/> Active</label><label className="check-field"><input name="isOpen" type="checkbox" defaultChecked={editing==='new'||editing.is_open}/> Open for matchmaking</label>{error&&<p className="auth-error" role="alert">{error}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={saving} onClick={()=>setEditing(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving?'Saving…':editing==='new'?'Add game':'Save changes'}</Button></div></form></Modal>}</>
+  return <><PageTitle eyebrow="CATALOG MANAGEMENT" title="Games" subtitle="Manage the games available to players." action={<Button onClick={()=>setEditing('new')}><Plus size={16}/> Add game</Button>}/><Panel title="Game catalog" subtitle="Edit listing details or switch game availability."><DataState loading={loading} error={error} retry={load} empty={!rows.length}><div className="admin-game-list">{rows.map(game=><article className="admin-game-row" key={game.id}>{game.imageUrl?<GameImage className="game-mini" src={game.imageUrl} alt="" fallback={<div className="game-mini">🎮</div>}/>:<div className="game-mini">🎮</div>}<div className="row-grow"><strong>{game.name}</strong><small>Code {game.gameCode} · Matchmaking {game.isOpen?'open':'closed'}</small></div><Status>{game.isActive?'Active':'Inactive'}</Status><Button variant="ghost" onClick={()=>setEditing(game)}>Edit</Button><Button variant="secondary" onClick={()=>toggleGame(game,'active')}>{game.isActive?'Deactivate':'Activate'}</Button><Button variant="secondary" onClick={()=>toggleGame(game,'open')}>{game.isOpen?'Close lobby':'Open lobby'}</Button></article>)}</div></DataState></Panel>{editing&&<Modal title={editing==='new'?'Add a game':`Edit ${editing.name}`} onClose={()=>!saving&&setEditing(null)}><form className="form-stack" onSubmit={saveGame}><FormField label="Game name"><input name="name" required maxLength="120" defaultValue={editing==='new'?'':editing.name} placeholder="e.g. Table Tennis"/></FormField><FormField label="Game code"><input name="gameCode" type="number" min="1" step="1" required defaultValue={editing==='new'?'':editing.gameCode} placeholder="Enter a positive number"/></FormField><FormField label="Game image URL"><input name="imageUrl" type="text" defaultValue={editing==='new'?'':editing.imageUrl||''} placeholder="https://example.com/game-image.png"/></FormField><label className="check-field"><input name="isActive" type="checkbox" defaultChecked={editing==='new'||editing.isActive}/> Active</label><label className="check-field"><input name="isOpen" type="checkbox" defaultChecked={editing==='new'||editing.isOpen}/> Open for matchmaking</label>{error&&<p className="auth-error" role="alert">{error}</p>}<div className="modal-actions"><Button variant="secondary" type="button" disabled={saving} onClick={()=>setEditing(null)}>Cancel</Button><Button type="submit" disabled={saving}>{saving?'Saving…':editing==='new'?'Add game':'Save changes'}</Button></div></form></Modal>}</>
 }
 
 function PaymentsAdmin({notify}) {

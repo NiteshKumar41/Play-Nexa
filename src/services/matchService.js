@@ -1,147 +1,201 @@
-import { calculateMatchFinancials } from '../utils/matchFinancials'
 import { MATCH_STATUS } from '../constants/matchStatus'
-import { getCurrentUserId } from './userService'
-import { creditWallet, debitWallet, refundWallet } from './walletService'
-import { makeId, mockStore, notifyMatchChange, now } from './mockStore'
+import { apiClient } from './apiClient'
+import { getAuthToken } from './tokenStorage'
+import { getGameById } from './gameService'
+import {
+  joinGameLobby,
+  leaveGameLobby,
+  joinMatchRoom,
+  leaveMatchRoom,
+  onMatchCreated,
+  onMatchJoined,
+  onMatchUpdated,
+  onMatchCancelled,
+  onMatchPlayerLeft,
+  onRoomCodeUpdated,
+  onResultSubmitted,
+  onDisputeSubmitted,
+  onMatchSettled,
+  onMatchRefunded,
+  onMatchClaimRejected,
+  onSocketError,
+  removeListener,
+  SOCKET_EVENTS,
+} from './socketService'
 
-function findMatch(matchId) {
-  const match = mockStore.matches.find(item => item.id === matchId)
-  if (!match) throw new Error('Match could not be found.')
-  return match
+/** @typedef {import('../types/match.types').Match} Match */
+/** @typedef {import('../types/match.types').MatchListItem} MatchListItem */
+
+async function requestMatchApi(path, { method = 'GET', body } = {}) {
+  const token = getAuthToken()
+  if (!token) throw new Error('You are not signed in.')
+
+  const response = await apiClient.request(`/matches${path}`, {
+    method,
+    body,
+  })
+  return response.data
 }
 
-function withGame(match) {
-  const game = mockStore.games.find(item => item.id === match.game_id)
-  return { ...match, game: game ? { ...game } : { name: 'Game', slug: '' } }
+/**
+ * @param {Match | MatchListItem} match
+ * @param {Awaited<ReturnType<typeof getGameById>> | null} game
+ * @returns {import('../types/match.types').PlayerMatch}
+ */
+function toPageMatch(match, game) {
+  const status = {
+    ACTIVE: MATCH_STATUS.OPEN,
+    JOINED: MATCH_STATUS.IN_PROGRESS,
+    CANCELLED: MATCH_STATUS.CANCELLED,
+  }[match.status] || match.status.toLowerCase()
+
+  return {
+    id: match.id,
+    game_id: match.gameId,
+    game: game
+      ? {
+          id: game.id,
+          name: game.name,
+          slug: String(game.gameCode),
+          category: game.category || 'Games',
+          image_url: game.imageUrl || game.image_url || '',
+        }
+      : {
+          id: match.gameId,
+          name: `Game ${match.gameCode}`,
+          slug: String(match.gameCode),
+          category: 'Games',
+          image_url: '',
+        },
+    host_user_id: match.player1,
+    opponent_user_id: match.player2,
+    entry_amount: match.player1Amount,
+    prize_pool: match.prizePool,
+    platform_fee: match.platformFee,
+    winner_amount: match.winnerAmount,
+    room_code: match.roomCode,
+    status,
+    winner_claimed_by: null,
+    winner_claim_status: null,
+    dispute_reason: null,
+    created_at: match.createdAt,
+    started_at: match.joinedAt,
+    finished_at: match.completedAt,
+    cancelled_at: match.cancelledAt,
+  }
 }
 
-export async function getOpenMatches(gameId) {
-  return mockStore.matches
-    .filter(match => match.game_id === gameId && match.status === MATCH_STATUS.OPEN)
-    .map(match => withGame(match))
+export async function getMatches(gameId, { page = 1, limit = 10, game: gameDetails } = {}) {
+  if (!gameId) throw new Error('A game ID is required to load matches.')
+
+  const query = new URLSearchParams({ gameId, page: String(page), limit: String(limit) })
+  const result = await requestMatchApi(`?${query}`)
+  const game = gameDetails || (result.matches.length ? await getGameById(gameId) : null)
+
+  return result.matches.map(match => toPageMatch(match, game))
 }
 
 export async function createMatch({ gameId, entryAmount }) {
-  const userId = getCurrentUserId()
-  await debitWallet({ userId, amount: entryAmount, description: 'Match entry reserved' })
-  const match = {
-    id: makeId('NX'), game_id: gameId, status: MATCH_STATUS.OPEN, entry_amount: Number(entryAmount), prize_pool: 0,
-    platform_fee: 0, winner_amount: 0, host_user_id: userId, opponent_user_id: null,
-    winner_claimed_by: null, winner_claim_status: null, winner_claim_path: null, winner_claim_image_url: null,
-    dispute_reason: null, dispute_screenshot_url: null, room_code: null, created_at: now(), started_at: null, finished_at: null,
-  }
-  mockStore.matches.unshift(match)
-  notifyMatchChange(match.id)
-  return match.id
+  const result = await requestMatchApi('', {
+    method: 'POST',
+    body: { gameId, entryFee: entryAmount },
+  })
+
+  return result.match.id
 }
 
-export async function joinMatch({ matchId }) {
-  const match = findMatch(matchId)
-  if (match.status !== MATCH_STATUS.OPEN || match.host_user_id === getCurrentUserId()) throw new Error('This match is no longer available.')
-  await debitWallet({ userId: getCurrentUserId(), amount: match.entry_amount, description: 'Match entry' })
-  const financials = calculateMatchFinancials(match.entry_amount, match.entry_amount)
-  Object.assign(match, {
-    opponent_user_id: getCurrentUserId(), status: MATCH_STATUS.IN_PROGRESS, prize_pool: financials.grossPool,
-    platform_fee: financials.platformFee, winner_amount: financials.winnerAmount, started_at: now(),
+export async function joinMatch(matchId) {
+  await requestMatchApi(`/${encodeURIComponent(matchId)}/join`, {
+    method: 'POST',
+    body: {},
   })
-  notifyMatchChange(match.id)
-  return match.id
 }
 
 export async function getMatch(matchId) {
-  return withGame(findMatch(matchId))
+  const result = await requestMatchApi(`/${encodeURIComponent(matchId)}`)
+  return toPageMatch(result.match, result.match.game)
 }
 
-export async function submitRoomCode({ matchId, roomCode }) {
-  const match = findMatch(matchId)
-  match.room_code = String(roomCode).trim()
-  notifyMatchChange(matchId)
+export async function updateRoomCode(matchId, roomCode) {
+  await requestMatchApi(`/${encodeURIComponent(matchId)}/room-code`, {
+    method: 'PATCH',
+    body: { roomCode },
+  })
 }
 
-function localImage(proofFile) {
-  return typeof File !== 'undefined' && proofFile instanceof File ? URL.createObjectURL(proofFile) : null
+export async function leaveMatch(matchId) {
+  await requestMatchApi(`/${encodeURIComponent(matchId)}/leave`, {
+    method: 'POST',
+    body: {},
+  })
 }
 
-export async function submitWinnerClaim({ matchId, proofFile }) {
-  const match = findMatch(matchId)
-  match.winner_claimed_by = getCurrentUserId()
-  match.winner_claim_status = 'PENDING'
-  match.winner_claim_path = proofFile?.name || null
-  match.winner_claim_image_url = localImage(proofFile)
-  notifyMatchChange(matchId)
+export async function cancelMatch(matchId) {
+  await requestMatchApi(`/${encodeURIComponent(matchId)}/cancel`, {
+    method: 'POST',
+    body: {},
+  })
 }
 
-export async function submitMatchDispute({ matchId, reason, proofFile }) {
-  const match = findMatch(matchId)
-  match.dispute_reason = String(reason).trim()
-  match.dispute_screenshot_url = localImage(proofFile)
-  match.status = MATCH_STATUS.DISPUTED
-  notifyMatchChange(matchId)
-}
+export function subscribeToLobby(gameId, callback, onError) {
+  const handleMatchCreated = payload => callback(SOCKET_EVENTS.MATCH_CREATED, payload)
+  const handleMatchJoined = payload => callback(SOCKET_EVENTS.MATCH_JOINED, payload)
+  const handleMatchCancelled = payload => callback(SOCKET_EVENTS.MATCH_CANCELLED, payload)
+  const handleMatchPlayerLeft = payload => callback(SOCKET_EVENTS.MATCH_PLAYER_LEFT, payload)
+  const handleSocketError = payload => onError?.(payload.message)
 
-async function refundMatchEntry(match, userId) {
-  await refundWallet({ userId, amount: match.entry_amount, description: 'Match entry refund' })
-}
+  onMatchCreated(handleMatchCreated)
+  onMatchJoined(handleMatchJoined)
+  onMatchCancelled(handleMatchCancelled)
+  onMatchPlayerLeft(handleMatchPlayerLeft)
+  onSocketError(handleSocketError)
+  joinGameLobby(gameId)
 
-export async function leaveMatch({ matchId }) {
-  const match = findMatch(matchId)
-  if (match.opponent_user_id !== getCurrentUserId() || match.room_code) throw new Error('This match can no longer be left.')
-  await refundMatchEntry(match, match.opponent_user_id)
-  match.opponent_user_id = null
-  match.status = MATCH_STATUS.OPEN
-  match.started_at = null
-  match.prize_pool = 0
-  match.platform_fee = 0
-  match.winner_amount = 0
-  notifyMatchChange(matchId)
-}
-
-export async function cancelMatch({ matchId }) {
-  const match = findMatch(matchId)
-  if (match.host_user_id !== getCurrentUserId() || match.opponent_user_id || match.room_code) throw new Error('This match can no longer be cancelled.')
-  await refundMatchEntry(match, match.host_user_id)
-  match.status = MATCH_STATUS.CANCELLED
-  notifyMatchChange(matchId)
-}
-
-export function subscribeToLobby(gameId, callback) {
-  const handler = event => {
-    const match = mockStore.matches.find(item => item.id === event.detail.matchId)
-    if (match?.game_id === gameId) callback({ event: 'UPDATE', match })
+  return () => {
+    removeListener(SOCKET_EVENTS.MATCH_CREATED, handleMatchCreated)
+    removeListener(SOCKET_EVENTS.MATCH_JOINED, handleMatchJoined)
+    removeListener(SOCKET_EVENTS.MATCH_CANCELLED, handleMatchCancelled)
+    removeListener(SOCKET_EVENTS.MATCH_PLAYER_LEFT, handleMatchPlayerLeft)
+    removeListener(SOCKET_EVENTS.SOCKET_ERROR, handleSocketError)
+    leaveGameLobby(gameId)
   }
-  window.addEventListener('playnexa:match-change', handler)
-  return () => window.removeEventListener('playnexa:match-change', handler)
 }
 
-export function subscribeToMatch(matchId, callback) {
-  const handler = event => { if (event.detail.matchId === matchId) callback(event) }
-  window.addEventListener('playnexa:match-change', handler)
-  return () => window.removeEventListener('playnexa:match-change', handler)
-}
+export function subscribeToMatch(matchId, callback, onError) {
+  const handleMatchUpdated = payload => callback(SOCKET_EVENTS.MATCH_UPDATED, payload)
+  const handleMatchCancelled = payload => callback(SOCKET_EVENTS.MATCH_CANCELLED, payload)
+  const handleMatchPlayerLeft = payload => callback(SOCKET_EVENTS.MATCH_PLAYER_LEFT, payload)
+  const handleRoomCodeUpdated = payload => callback(SOCKET_EVENTS.ROOM_CODE_UPDATED, payload)
+  const handleResultSubmitted = payload => callback(SOCKET_EVENTS.RESULT_SUBMITTED, payload)
+  const handleDisputeSubmitted = payload => callback(SOCKET_EVENTS.DISPUTE_SUBMITTED, payload)
+  const handleMatchSettled = payload => callback(SOCKET_EVENTS.MATCH_SETTLED, payload)
+  const handleMatchRefunded = payload => callback(SOCKET_EVENTS.MATCH_REFUNDED, payload)
+  const handleMatchClaimRejected = payload => callback(SOCKET_EVENTS.MATCH_CLAIM_REJECTED, payload)
+  const handleSocketError = payload => onError?.(payload.message)
 
-export async function getSettlementQueue() {
-  return mockStore.settlementMatches.map(match => ({ ...match }))
-}
+  onMatchUpdated(handleMatchUpdated)
+  onMatchCancelled(handleMatchCancelled)
+  onMatchPlayerLeft(handleMatchPlayerLeft)
+  onRoomCodeUpdated(handleRoomCodeUpdated)
+  onResultSubmitted(handleResultSubmitted)
+  onDisputeSubmitted(handleDisputeSubmitted)
+  onMatchSettled(handleMatchSettled)
+  onMatchRefunded(handleMatchRefunded)
+  onMatchClaimRejected(handleMatchClaimRejected)
+  onSocketError(handleSocketError)
+  joinMatchRoom(matchId)
 
-export async function declareMatchWinner({ matchId, winnerUserId }) {
-  const match = mockStore.settlementMatches.find(item => item.id === matchId)
-  if (!match) throw new Error('Settlement could not be found.')
-  match.status = MATCH_STATUS.COMPLETED
-  match.winner_claim_status = 'APPROVED'
-  await creditWallet({ userId: winnerUserId, amount: match.winner_amount, description: 'Match winnings' })
-}
-
-export async function refundMatchPlayers(matchId) {
-  const match = mockStore.settlementMatches.find(item => item.id === matchId)
-  if (!match) throw new Error('Settlement could not be found.')
-  await Promise.all([match.host_user_id, match.opponent_user_id].filter(Boolean).map(userId => refundWallet({
-    userId, amount: match.entry_amount, description: 'Match refund',
-  })))
-  match.status = MATCH_STATUS.CANCELLED
-}
-
-export async function rejectMatchWinnerClaim(matchId) {
-  const match = mockStore.settlementMatches.find(item => item.id === matchId)
-  if (!match) throw new Error('Settlement could not be found.')
-  match.winner_claim_status = 'REJECTED'
+  return () => {
+    removeListener(SOCKET_EVENTS.MATCH_UPDATED, handleMatchUpdated)
+    removeListener(SOCKET_EVENTS.MATCH_CANCELLED, handleMatchCancelled)
+    removeListener(SOCKET_EVENTS.MATCH_PLAYER_LEFT, handleMatchPlayerLeft)
+    removeListener(SOCKET_EVENTS.ROOM_CODE_UPDATED, handleRoomCodeUpdated)
+    removeListener(SOCKET_EVENTS.RESULT_SUBMITTED, handleResultSubmitted)
+    removeListener(SOCKET_EVENTS.DISPUTE_SUBMITTED, handleDisputeSubmitted)
+    removeListener(SOCKET_EVENTS.MATCH_SETTLED, handleMatchSettled)
+    removeListener(SOCKET_EVENTS.MATCH_REFUNDED, handleMatchRefunded)
+    removeListener(SOCKET_EVENTS.MATCH_CLAIM_REJECTED, handleMatchClaimRejected)
+    removeListener(SOCKET_EVENTS.SOCKET_ERROR, handleSocketError)
+    leaveMatchRoom(matchId)
+  }
 }

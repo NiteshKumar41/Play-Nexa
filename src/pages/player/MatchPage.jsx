@@ -1,10 +1,50 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ShieldCheck } from 'lucide-react';
-import { Button, ConfirmModal, CopyButton, DataState, FormField, PageTitle, Panel, Status } from '../../components/common';
+import { Button, ConfirmModal, CopyButton, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common';
 import { useAuth } from '../../hooks/useAuth';
 import { formatINR, player } from '../../data/mockData';
-import { cancelMatch, getMatch, leaveMatch, submitMatchDispute, submitRoomCode, submitWinnerClaim, subscribeToMatch } from '../../services/matchService';
+import { cancelMatch, getMatch, leaveMatch, updateRoomCode, subscribeToMatch } from '../../services/matchService';
+import { SOCKET_EVENTS } from '../../services/socketService';
+import { getResult, releaseResultEvidence, submitDispute, submitWinnerClaim } from '../../services/resultService';
+
+const MAX_SCREENSHOT_SIZE = 5 * 1024 * 1024
+const SCREENSHOT_EXTENSIONS = {
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+  'image/webp': ['.webp'],
+}
+
+function getScreenshotError(file) {
+  if (!(file instanceof File) || file.size === 0) return 'Choose a screenshot to continue.'
+  if (file.size > MAX_SCREENSHOT_SIZE) return 'Screenshot must be 5 MB or smaller.'
+
+  const allowedExtensions = SCREENSHOT_EXTENSIONS[file.type]
+  const hasAllowedExtension = allowedExtensions?.some(extension =>
+    file.name.toLowerCase().endsWith(extension),
+  )
+  if (!hasAllowedExtension) return 'Choose a JPG, PNG, or WEBP image.'
+
+  return ''
+}
+
+function getResultMessage(status, claimStatus) {
+  if (status === 'disputed') return 'Match under review. No further result changes are available while the dispute is active.'
+  if (status === 'settled') return 'Match settled. The winner claim was approved.'
+  if (claimStatus === 'APPROVED') return 'Winner claim approved.'
+  if (claimStatus === 'REJECTED' || status === 'rejected') return 'Winner claim rejected.'
+  return 'Winner claim submitted. Status: pending review. No prize has been paid.'
+}
+
+async function loadMatchResult(matchId, status) {
+  if (!['completed', 'disputed', 'settled', 'rejected'].includes(status)) return null
+
+  try{
+    return await getResult(matchId)
+  }catch(error){
+    if(error.status===403)return null
+    throw error
+  }
+}
 
 export function MatchPage({notify}) {
   const {id}=useParams()
@@ -16,27 +56,51 @@ export function MatchPage({notify}) {
   const [action,setAction]=useState('')
   const [submitting,setSubmitting]=useState(false)
   const [roomError,setRoomError]=useState('')
-  const [evidenceSubmitting,setEvidenceSubmitting]=useState(false)
-  const [evidenceError,setEvidenceError]=useState('')
+  const [result,setResult]=useState(null)
+  const [resultAction,setResultAction]=useState('')
+  const [resultSubmitting,setResultSubmitting]=useState(false)
+  const [resultError,setResultError]=useState('')
   const matchRef=useRef(null)
   const notifyRef=useRef(notify)
+  const refreshRevision=useRef(0)
   useEffect(()=>{matchRef.current=match},[match])
   useEffect(()=>{notifyRef.current=notify},[notify])
+  useEffect(()=>()=>releaseResultEvidence(result),[result])
   const loadMatch=useCallback(async()=>{
+    const requestRevision=++refreshRevision.current
     setLoading(true)
     setError('')
-    try{setMatch(await getMatch(id))}
-    catch(loadError){setError(loadError instanceof Error?loadError.message:'Unable to load match details.')}
-    finally{setLoading(false)}
+    try{
+      const loadedMatch=await getMatch(id)
+      if(requestRevision===refreshRevision.current)setMatch(loadedMatch)
+      if(requestRevision===refreshRevision.current){
+        const loadedResult=await loadMatchResult(id,loadedMatch.status)
+        if(requestRevision===refreshRevision.current)setResult(loadedResult)
+        else releaseResultEvidence(loadedResult)
+      }
+    }catch(loadError){
+      if(requestRevision===refreshRevision.current)setError(loadError instanceof Error?loadError.message:'Unable to load match details.')
+    }finally{
+      if(requestRevision===refreshRevision.current)setLoading(false)
+    }
   },[id])
   const refreshMatch=useCallback(async()=>{
+    const requestRevision=++refreshRevision.current
     try{
       const updatedMatch=await getMatch(id)
+      if(requestRevision!==refreshRevision.current)return
+      const updatedResult=await loadMatchResult(id,updatedMatch.status)
+      if(requestRevision!==refreshRevision.current){
+        releaseResultEvidence(updatedResult)
+        return
+      }
       const previousMatch=matchRef.current
       setMatch(updatedMatch)
+      setResult(updatedResult)
       if(!previousMatch?.room_code&&updatedMatch.room_code)notifyRef.current('Room code is ready.')
       if(previousMatch?.status!==updatedMatch.status)notifyRef.current(`Match status updated: ${updatedMatch.status.replaceAll('_',' ')}.`)
     }catch(refreshError){
+      if(requestRevision!==refreshRevision.current)return
       notifyRef.current(refreshError instanceof Error?refreshError.message:'Unable to refresh match details.')
     }
   },[id])
@@ -46,7 +110,22 @@ export function MatchPage({notify}) {
     return()=>{cancelled=true}
   },[loadMatch])
   useEffect(()=>{
-    return subscribeToMatch(id,refreshMatch)
+    return subscribeToMatch(id,(event,payload)=>{
+      if(payload?.matchId&&payload.matchId!==id)return
+      if(event===SOCKET_EVENTS.ROOM_CODE_UPDATED){
+        const currentMatch=matchRef.current
+        if(currentMatch?.room_code===payload.roomCode||currentMatch?.room_code)return
+        refreshRevision.current+=1
+        if(currentMatch){
+          const updatedMatch={...currentMatch,room_code:payload.roomCode}
+          matchRef.current=updatedMatch
+          setMatch(updatedMatch)
+        }
+        notifyRef.current('Room code is ready.')
+        return
+      }
+      void refreshMatch()
+    },message=>notifyRef.current(message))
   },[id,refreshMatch])
   async function handleRoomCodeSubmit(event){
     event.preventDefault()
@@ -54,7 +133,7 @@ export function MatchPage({notify}) {
     setSubmitting(true)
     setRoomError('')
     try{
-      await submitRoomCode({matchId:id,roomCode:form.get('roomCode')})
+      await updateRoomCode(id,form.get('roomCode'))
       await refreshMatch()
     }catch(submitError){
       setRoomError(submitError instanceof Error?submitError.message:'Unable to submit the room code.')
@@ -62,47 +141,50 @@ export function MatchPage({notify}) {
       setSubmitting(false)
     }
   }
-  async function handleWinnerClaim(event){
+  async function handleResultSubmit(event){
     event.preventDefault()
-    setEvidenceSubmitting(true)
-    setEvidenceError('')
-    try{
-      await submitWinnerClaim({
-        matchId:id,
-        proofFile:new FormData(event.currentTarget).get('winnerScreenshot'),
-      })
-      await refreshMatch()
-      notify('Winner claim submitted for admin review. No prize was paid.')
-    }catch(claimError){
-      setEvidenceError(claimError instanceof Error?claimError.message:'Unable to submit winner claim.')
-    }finally{
-      setEvidenceSubmitting(false)
+    const formData=new FormData(event.currentTarget)
+    const screenshot=formData.get('screenshot')
+    const screenshotError=getScreenshotError(screenshot)
+    if(screenshotError){
+      setResultError(screenshotError)
+      return
     }
-  }
-  async function handleDisputeSubmit(event){
-    event.preventDefault()
-    setEvidenceSubmitting(true)
-    setEvidenceError('')
+
+    const reason=String(formData.get('reason')||'').trim()
+    if(resultAction==='dispute'&&(!reason||reason.length>2000)){
+      setResultError('Enter a dispute reason of 1 to 2,000 characters.')
+      return
+    }
+    const remarks=String(formData.get('remarks')||'').trim()
+    if(resultAction==='claim'&&remarks.length>1000){
+      setResultError('Remarks must be 1,000 characters or fewer.')
+      return
+    }
+
+    setResultSubmitting(true)
+    setResultError('')
     try{
-      const values=new FormData(event.currentTarget)
-      await submitMatchDispute({
-        matchId:id,
-        reason:values.get('reason'),
-        proofFile:values.get('disputeScreenshot'),
-      })
+      if(resultAction==='claim'){
+        await submitWinnerClaim(id,{screenshot,remarks})
+        notify('Result submitted. Waiting for review.')
+      }else{
+        await submitDispute(id,{reason,screenshot})
+        notify('Dispute submitted. The match is under review.')
+      }
+      setResultAction('')
       await refreshMatch()
-      notify('Dispute submitted for admin review.')
-    }catch(disputeError){
-      setEvidenceError(disputeError instanceof Error?disputeError.message:'Unable to submit dispute.')
+    }catch(submitError){
+      setResultError(submitError instanceof Error?submitError.message:'Unable to submit match result.')
     }finally{
-      setEvidenceSubmitting(false)
+      setResultSubmitting(false)
     }
   }
   async function confirmMatchAction(){
     setSubmitting(true)
     try{
-      if(action==='leave')await leaveMatch({matchId:id})
-      else await cancelMatch({matchId:id})
+      if(action==='leave')await leaveMatch(id)
+      else await cancelMatch(id)
       setAction('')
       notify(action==='leave'?'You left the match. Your entry fee was refunded.':'Match cancelled. Your entry fee was refunded.')
       navigate(`/games/${match.game.slug}`)
@@ -124,9 +206,12 @@ export function MatchPage({notify}) {
   const canCancel=creator&&!opponentJoined&&!hasRoomCode&&match.status==='active'
   const canSubmitRoom=creator&&opponentJoined&&!hasRoomCode&&match.status==='in_progress'
   const isParticipant=creator||isOpponent
-  const canClaimWinner=isParticipant&&opponentJoined&&match.status==='in_progress'&&!match.winner_claim_status
-  const canDispute=isParticipant&&opponentJoined&&['in_progress','completed'].includes(match.status)
-    &&!match.dispute_reason&&match.winner_claimed_by!==user?.id
+  const canClaimResult=isParticipant&&opponentJoined&&match.status==='in_progress'
+  const canDisputeResult=isParticipant&&match.status==='completed'
+    &&result?.winnerClaimStatus==='PENDING'&&result.winnerClaimedBy!==user?.id
+  const resultWinnerName=result?.winnerPlayer===result?.player1
+    ?result.player1Name
+    :result?.winnerPlayer===result?.player2?result.player2Name:null
   const name=profile?.full_name||player.name
   return (
     <>
@@ -154,22 +239,41 @@ export function MatchPage({notify}) {
         {hasRoomCode&&<div className="room-code"><div><small>ROOM CODE</small><strong>{match.room_code}</strong></div><CopyButton value={match.room_code} onCopied={()=>notify('Room code copied')}/></div>}
         {canSubmitRoom&&<form className="form-stack room-code-form" onSubmit={handleRoomCodeSubmit}><FormField label="Room code"><input name="roomCode" maxLength="64" required placeholder="Enter the game room code"/></FormField>{roomError&&<p className="auth-error" role="alert">{roomError}</p>}<Button type="submit" disabled={submitting}>{submitting?'Submitting…':'Share room code'}</Button></form>}
         <div className="match-status-line"><Status>{match.status.replaceAll('_',' ')}</Status><span>Game code: {match.game.slug}</span></div>
+        {['completed','disputed','settled','rejected'].includes(match.status)&&<div className="notice"><p>{getResultMessage(match.status,result?.winnerClaimStatus)}</p></div>}
+        {canClaimResult&&<Button onClick={()=>{setResultError('');setResultAction('claim')}}>Submit Result</Button>}
+        {canDisputeResult&&<Button variant="secondary" onClick={()=>{setResultError('');setResultAction('dispute')}}>Dispute Result</Button>}
         {(canLeave||canCancel)&&<div className="button-row match-management-actions">{canLeave&&<Button variant="danger-outline" onClick={()=>setAction('leave')}>Leave and refund</Button>}{canCancel&&<Button variant="danger-outline" onClick={()=>setAction('cancel')}>Cancel and refund</Button>}</div>}
       </Panel>
+      {result&&<Panel title="Match result" subtitle={getResultMessage(match.status,result.winnerClaimStatus)}>
+        <div className="form-stack">
+          <p>Winner claim status: {result.winnerClaimStatus?.toLowerCase()||'pending'}</p>
+          {result.winnerPlayer&&<p>Winner: {resultWinnerName||'Match player'}</p>}
+          {result.winnerClaimRemarks&&<p>{result.winnerClaimRemarks}</p>}
+          {result.disputeReason&&<p>Dispute reason: {result.disputeReason}</p>}
+          {result.player1ScreenshotUrl&&<div><small>Player 1 evidence</small><img src={result.player1ScreenshotUrl} alt="Player 1 match evidence" style={{display:'block',maxWidth:'100%',maxHeight:320,objectFit:'contain'}}/></div>}
+          {result.player2ScreenshotUrl&&<div><small>Player 2 evidence</small><img src={result.player2ScreenshotUrl} alt="Player 2 match evidence" style={{display:'block',maxWidth:'100%',maxHeight:320,objectFit:'contain'}}/></div>}
+        </div>
+      </Panel>}
       <div className="content-grid match-actions">
-        <Panel title="Match result & evidence" subtitle="Submit your result or raise a dispute for admin review.">
-          {match.winner_claimed_by&&<div className="form-stack"><div className="notice"><ShieldCheck size={18}/><p>Winner claim {match.winner_claim_status?.toLowerCase()} · Claimed by {match.winner_claimed_by===user?.id?'you':`player ${match.winner_claimed_by.slice(0,8)}`}. No prize is paid until an administrator settles the match.</p></div>{match.winner_claim_image_url&&<img src={match.winner_claim_image_url} alt="Winner claim screenshot" style={{maxWidth:'100%',maxHeight:320,objectFit:'contain'}}/>}</div>}
-          {canClaimWinner&&<form className="form-stack" onSubmit={handleWinnerClaim}><FormField label="Winner screenshot"><input name="winnerScreenshot" type="file" accept="image/jpeg,image/png,image/webp" required/></FormField><p className="form-disclaimer">Your screenshot will be stored privately and reviewed by an administrator. Submitting a claim does not automatically pay the prize.</p><Button type="submit" disabled={evidenceSubmitting}>{evidenceSubmitting?'Submitting…':'Claim winner'}</Button></form>}
-          {match.dispute_reason&&<div className="form-stack"><div className="notice"><ShieldCheck size={18}/><p>Match dispute submitted for admin review: {match.dispute_reason}</p></div>{match.dispute_screenshot_url&&<img src={match.dispute_screenshot_url} alt="Match dispute screenshot" style={{maxWidth:'100%',maxHeight:320,objectFit:'contain'}}/>}</div>}
-          {canDispute&&<form className="form-stack" onSubmit={handleDisputeSubmit}><FormField label="Dispute reason"><textarea name="reason" minLength="10" maxLength="2000" rows="3" placeholder="Explain what happened" required/></FormField><FormField label="Dispute screenshot"><input name="disputeScreenshot" type="file" accept="image/jpeg,image/png,image/webp" required/></FormField><Button variant="secondary" type="submit" disabled={evidenceSubmitting}>{evidenceSubmitting?'Submitting…':'Submit dispute'}</Button></form>}
-          {evidenceError&&<p className="auth-error" role="alert">{evidenceError}</p>}
-          {!canClaimWinner&&!canDispute&&!match.winner_claimed_by&&!match.dispute_reason&&<div className="notice"><ShieldCheck size={18}/><p>Match result submissions become available once both players are in the match. Winnings are not paid automatically.</p></div>}
-        </Panel>
         <Panel title="Game" subtitle={match.game.category}>
           <div className="lobby-hero"><div className="lobby-badge">{match.game.image_url?<img src={match.game.image_url} alt=""/>:'🎮'}</div><div className="lobby-hero-copy"><h2>{match.game.name}</h2><p>Game code: {match.game.slug}</p></div></div>
         </Panel>
       </div>
       {action&&<ConfirmModal title={action==='leave'?'Leave this match?':'Cancel this match?'} message={`Your ${formatINR(Number(match.entry_amount))} entry fee will be refunded. This can only be done before a room code is set.`} confirmLabel={submitting?'Processing…':'Confirm and refund'} danger onClose={()=>setAction('')} onConfirm={confirmMatchAction}/>}
+      {resultAction&&<Modal title={resultAction==='claim'?'Submit match result':'Dispute result'} onClose={()=>setResultAction('')}>
+        <form className="form-stack" onSubmit={handleResultSubmit}>
+          {resultAction==='claim'
+            ?<FormField label="Screenshot"><input name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" required/></FormField>
+            :<>
+              <FormField label="Reason"><textarea name="reason" maxLength="2000" rows="3" required placeholder="Explain why you dispute the winner claim"/></FormField>
+              <FormField label="Screenshot"><input name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" required/></FormField>
+            </>}
+          {resultAction==='claim'&&<FormField label="Remarks (optional)"><textarea name="remarks" maxLength="1000" rows="2"/></FormField>}
+          <p className="form-disclaimer">PNG, JPG, JPEG, or WEBP only; maximum 5 MB. A result claim is evidence for review and does not pay the prize.</p>
+          {resultError&&<p className="auth-error" role="alert">{resultError}</p>}
+          <div className="modal-actions"><Button variant="secondary" type="button" onClick={()=>setResultAction('')}>Cancel</Button><Button type="submit" disabled={resultSubmitting}>{resultSubmitting?'Submitting…':resultAction==='claim'?'Submit result':'Submit dispute'}</Button></div>
+        </form>
+      </Modal>}
     </>
   )
 }

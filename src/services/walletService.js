@@ -1,3 +1,4 @@
+import { apiClient } from './apiClient'
 import { player } from '../data/users'
 import { TRANSACTION_STATUS } from '../constants/transactionStatus'
 import { TRANSACTION_TYPE } from '../constants/transactionTypes'
@@ -8,12 +9,16 @@ function currentUserId() {
   return getCurrentUserId() || player.id
 }
 
-export async function getMyWalletOverview() {
-  const userId = currentUserId()
-  return {
-    wallet: { id: `W-${userId}`, user_id: userId, balance: mockStore.walletBalances.get(userId) ?? 0, currency: 'INR' },
-    transactions: mockStore.walletTransactions.map(transaction => ({ ...transaction })),
-  }
+// Both reads use the JWT identity; the browser never chooses a wallet user ID.
+export async function getWallet() {
+  const response = await apiClient.get('/wallet')
+  return response.data
+}
+
+export async function getTransactions({ page = 1, limit = 10 } = {}) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) })
+  const response = await apiClient.get(`/wallet/transactions?${query}`)
+  return response.data
 }
 
 function addTransaction(type, amount, description, status = TRANSACTION_STATUS.COMPLETED) {

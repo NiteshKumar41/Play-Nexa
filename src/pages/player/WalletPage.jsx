@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, ShieldCheck } from 'lucide-react';
 import { Button, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common';
-import { formatINR } from '../../data/mockData';
-import { createWithdrawal, getMyWalletOverview } from '../../services/walletService';
+import { formatINR } from '../../utils/currency';
+import { createWithdrawal, getTransactions, getWallet } from '../../services/walletService';
 import { completeMockPayment, createPaymentOrder, getActiveManualUpiMethod, submitManualDeposit } from '../../services/paymentService';
 import { TransactionRows } from '../../components/wallet/TransactionList'
 
@@ -25,28 +25,20 @@ export function WalletPage({notify}) {
   const [rows,setRows]=useState([])
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
+  const [walletError,setWalletError]=useState('')
   const loadWallet=useCallback(async()=>{
     setLoading(true)
     setError('')
-    try{
-      const overview=await getMyWalletOverview()
-      setWallet(overview.wallet)
-      setRows(overview.transactions.map(transaction=>{
-        const isDebit=['debit','withdrawal','WITHDRAW','match_entry','GAME_CREATE','GAME_JOIN'].includes(transaction.transaction_type)
-        return {
-          id:transaction.id,
-          title:transaction.description||transaction.transaction_type.replaceAll('_',' ').replace(/\b\w/g,letter=>letter.toUpperCase()),
-          date:new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'}).format(new Date(transaction.created_at)),
-          amount:Number(transaction.amount)*(isDebit?-1:1),
-          kind:isDebit?'debit':'credit',
-          status:transaction.status.replaceAll('_',' ').replace(/\b\w/g,letter=>letter.toUpperCase()),
-        }
-      }))
-    }catch(loadError){
-      setError(loadError instanceof Error?loadError.message:'Unable to load wallet data.')
-    }finally{
-      setLoading(false)
-    }
+    setWalletError('')
+    const [walletResult, transactionResult] = await Promise.allSettled([
+      getWallet(),
+      getTransactions({ page: 1, limit: 100 }),
+    ])
+    if(walletResult.status==='fulfilled')setWallet(walletResult.value)
+    else setWalletError('Unable to load wallet balance. Please try again.')
+    if(transactionResult.status==='fulfilled')setRows(transactionResult.value.transactions||[])
+    else setError('Unable to load transactions. Please try again.')
+    setLoading(false)
   },[])
   async function createWalletTopUp(event){
     event.preventDefault()
@@ -148,11 +140,12 @@ export function WalletPage({notify}) {
     queueMicrotask(()=>{if(!cancelled)loadWallet()})
     return()=>{cancelled=true}
   },[loadWallet])
-  const visible=rows.filter(row=>filter==='All'||(filter==='Credits'?row.amount>0:row.amount<0))
+  const creditTypes=['ADD_MONEY','GAME_WIN','GAME_REFUND']
+  const visible=rows.filter(row=>filter==='All'||(filter==='Credits'?creditTypes.includes(row.transactionType):!creditTypes.includes(row.transactionType)))
   return <>
     <PageTitle eyebrow="WALLET & PAYMENTS" title="Your wallet" subtitle="Manage funds securely and review every transaction."/>
     <div className="wallet-hero">
-      <div><small>AVAILABLE BALANCE</small><strong>{loading?'Loading…':wallet?formatINR(Number(wallet.balance)):'—'}</strong><span><i/> Wallet protected and ready</span></div>
+      <div><small>AVAILABLE BALANCE</small><strong>{loading?'Loading…':wallet?formatINR(Number(wallet.balance)):'—'}</strong><span role={walletError?'alert':undefined}>{walletError||'Wallet protected and ready'}</span></div>
       <div className="button-row"><Button onClick={()=>setShowAddMoney(true)}><ArrowDownLeft size={16}/> Add money</Button><Button variant="secondary" onClick={()=>{setWithdrawalError('');setWithdrawalResult(null);setShowWithdrawal(true)}}>Withdraw <ArrowUpRight size={16}/></Button></div>
     </div>
     <Panel title="Transaction history" subtitle="Track deposits, match entries, and winnings" action={<div className="filter-tabs compact">{['All','Credits','Debits'].map(item=><button type="button" aria-pressed={filter===item} className={filter===item?'selected':''} key={item} onClick={()=>setFilter(item)}>{item}</button>)}</div>}>

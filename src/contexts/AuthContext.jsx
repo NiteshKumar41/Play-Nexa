@@ -1,140 +1,181 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AuthContext } from './auth-context'
-import { getSession, onAuthStateChange, signIn, signOut, signUp } from '../services/authService'
-import { getUserProfile } from '../services/userService'
+import { AUTH_EXPIRED_EVENT } from '../services/apiClient'
+import {
+  getCurrentUser,
+  login as loginRequest,
+  logout as logoutRequest,
+  signup as signupRequest,
+} from '../services/authService'
+import { clearAuthToken, getAuthToken } from '../services/tokenStorage'
+import { connect as connectSocket, disconnect as disconnectSocket } from '../services/socketService'
 
-function getProfileAccessError(profile) {
-  if (profile.is_blocked) {
-    return 'This account has been blocked. Contact support for help.'
+function createProfile(user) {
+  if (!user) return null
+
+  return {
+    id: user.id,
+    full_name: user.fullName,
+    phone: user.phone,
+    email: user.email || '',
+    dob: user.dob || '',
+    gender: user.gender || '',
+    upi_id: user.upiId || '',
+    user_type: user.role,
+    active: true,
+    is_blocked: false,
   }
-  if (!profile.active) {
-    return 'This account is inactive. Contact support for help.'
-  }
-  return null
 }
 
-function errorMessage(error) {
-  return error instanceof Error ? error.message : 'An unexpected authentication error occurred.'
+function createSession(user, token) {
+  if (!token) return null
+
+  return {
+    access_token: token,
+    user: user
+      ? {
+          id: user.id,
+          phone: user.phone,
+          role: user.role,
+          user_metadata: { full_name: user.fullName },
+        }
+      : null,
+  }
 }
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null)
-  const [profile, setProfile] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [initialToken] = useState(() => getAuthToken())
+  const [token, setToken] = useState(initialToken)
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(Boolean(initialToken))
   const [authError, setAuthError] = useState('')
-  const [profileRevision, setProfileRevision] = useState(0)
-  const sessionRef = useRef(null)
-  const authEventRevision = useRef(0)
+
+  const profile = createProfile(user)
+  const session = createSession(user, token)
+  const isAuthenticated = Boolean(user && token)
 
   useEffect(() => {
-    let mounted = true
-    let subscription
+    let isMounted = true
 
-    try {
-      const authState = onAuthStateChange((event, nextSession) => {
-        authEventRevision.current += 1
-        const previousUserId = sessionRef.current?.user?.id
-        const nextUserId = nextSession?.user?.id
-        sessionRef.current = nextSession
-        setSession(nextSession)
-
-        if (!nextSession) {
-          setProfile(null)
-          setLoading(false)
-          return
-        }
-
-        if (previousUserId !== nextUserId) {
-          setProfile(null)
-          setLoading(true)
-        }
-        if (event === 'SIGNED_IN') setAuthError('')
-      })
-      subscription = authState.data.subscription
-
-      const initialRevision = authEventRevision.current
-      getSession()
-        .then(({ data, error }) => {
-          if (error) throw error
-          if (!mounted || authEventRevision.current !== initialRevision) return
-
-          sessionRef.current = data.session
-          setSession(data.session)
-          if (!data.session) setLoading(false)
-        })
-        .catch(error => {
-          if (!mounted) return
-          setAuthError(errorMessage(error))
-          setLoading(false)
-        })
-    } catch (error) {
-      queueMicrotask(() => {
-        if (!mounted) return
-        setAuthError(errorMessage(error))
-        setLoading(false)
-      })
+    function handleExpiredSession() {
+      disconnectSocket()
+      setToken(null)
+      setUser(null)
+      setAuthError('Your session has expired. Please sign in again.')
+      setLoading(false)
     }
 
-    return () => {
-      mounted = false
-      subscription?.unsubscribe()
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleExpiredSession)
+
+    if (!initialToken) {
+      return () => {
+        isMounted = false
+        window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpiredSession)
+      }
     }
-  }, [])
 
-  useEffect(() => {
-    const userId = session?.user?.id
-    if (!userId) return undefined
-
-    let current = true
-    getUserProfile(userId)
-      .then(async nextProfile => {
-        if (!current) return
-        const accessError = getProfileAccessError(nextProfile)
-        if (accessError) {
-          setAuthError(accessError)
-          try {
-            await signOut()
-          } catch (error) {
-            if (current) setAuthError(`${accessError} Sign-out failed: ${errorMessage(error)}`)
-          }
-          return
-        }
-
-        setProfile(nextProfile)
+    getCurrentUser()
+      .then(currentUser => {
+        if (!isMounted) return
+        setUser(currentUser)
         setAuthError('')
       })
       .catch(error => {
-        if (current) setAuthError(`Could not load your account profile: ${errorMessage(error)}`)
+        if (!isMounted) return
+
+        if (error.status === 403) {
+          clearAuthToken()
+          setToken(null)
+          setUser(null)
+        }
+
+        setAuthError(
+          error instanceof Error
+            ? error.message
+            : 'Could not restore your account. Please try again.',
+        )
       })
       .finally(() => {
-        if (current) setLoading(false)
+        if (isMounted) setLoading(false)
       })
 
     return () => {
-      current = false
+      isMounted = false
+      window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpiredSession)
     }
-  }, [session?.user?.id, profileRevision])
+  }, [initialToken])
 
-  const refreshProfile = useCallback(() => {
-    setLoading(true)
-    setProfileRevision(revision => revision + 1)
+  useEffect(() => {
+    if (token) connectSocket(token)
+    else disconnectSocket()
+  }, [token])
+
+  useEffect(() => () => disconnectSocket(), [])
+
+  const login = useCallback(async credentials => {
+    const result = await loginRequest(credentials)
+    setToken(result.token)
+    setUser(result.token ? result.user : null)
+    setAuthError('')
+    return result
   }, [])
 
-  const login = useCallback(credentials => signIn(credentials), [])
-  const signup = useCallback(details => signUp(details), [])
-  const logout = useCallback(() => signOut(), [])
+  const signup = useCallback(async details => {
+    const result = await signupRequest(details)
+    setToken(result.token)
+    setUser(result.token ? result.user : null)
+    setAuthError('')
+    return result
+  }, [])
+
+  const logout = useCallback(async () => {
+    await logoutRequest()
+    disconnectSocket()
+    setToken(null)
+    setUser(null)
+    setAuthError('')
+  }, [])
+
+  const refreshUser = useCallback(async () => {
+    if (!getAuthToken()) {
+      setToken(null)
+      setUser(null)
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const currentUser = await getCurrentUser()
+      setUser(currentUser)
+      setAuthError('')
+    } catch (error) {
+      if (error.status === 403) {
+        clearAuthToken()
+        setToken(null)
+        setUser(null)
+      }
+      setAuthError(error instanceof Error ? error.message : 'Could not load your account.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   return (
     <AuthContext.Provider value={{
-      session,
-      user: session?.user ?? null,
+      user,
       profile,
+      token,
+      session,
+      isAuthenticated,
       loading,
       authError,
       login,
       signup,
       logout,
-      refreshProfile,
+      refreshUser,
+      refreshProfile: refreshUser,
     }}>
       {children}
     </AuthContext.Provider>

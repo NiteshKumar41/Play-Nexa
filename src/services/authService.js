@@ -1,99 +1,69 @@
-import { getSupabaseClient } from '../lib/supabase'
-import { getUserProfile } from './userService'
+import { adminUser, player } from '../data'
+import { USER_ROLES } from '../constants/userRoles'
+import { getUserProfile, saveUserProfile } from './userService'
 
-function normalizePhone(phone) {
-  const value = phone.trim()
+const SESSION_KEY = 'playnexa.mock-session'
+const listeners = new Set()
+let nextUserId = 1
 
-  if (/^\+[1-9]\d{7,14}$/.test(value)) return value
-
-  const digits = value.replace(/\D/g, '')
-  if (/^\d{10}$/.test(digits)) return `+91${digits}`
-
-  throw new Error('Enter a valid phone number with country code.')
-}
-
-async function requireActiveProfile(userId) {
-  let profile
-
+function readStoredSession() {
   try {
-    profile = await getUserProfile(userId)
-  } catch (error) {
-    await signOut()
-    throw new Error('Could not load your account profile. Please try again.', { cause: error })
+    const session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null')
+    return session?.user?.id ? session : null
+  } catch {
+    return null
   }
-
-  if (profile.is_blocked) {
-    await signOut()
-    throw new Error('This account has been blocked. Contact support for help.')
-  }
-
-  if (!profile.active) {
-    await signOut()
-    throw new Error('This account is inactive. Contact support for help.')
-  }
-
-  return profile
 }
 
-export async function signUp({ phone, passcode, fullName, email, dob, gender, upiId }) {
-  const { data, error } = await getSupabaseClient().auth.signUp({
-    phone: normalizePhone(phone),
-    password: passcode,
-    options: {
-      data: {
-        full_name: fullName.trim(),
-        email: email.trim(),
-        dob,
-        gender,
-        upi_id: upiId.trim(),
-      },
-    },
-  })
+function writeSession(session) {
+  if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  else localStorage.removeItem(SESSION_KEY)
+  listeners.forEach(callback => callback(session ? 'SIGNED_IN' : 'SIGNED_OUT', session))
+}
 
-  if (error) throw error
-  if (data.session && data.user) {
-    await requireActiveProfile(data.user.id)
+function makeSession(profile) {
+  return { user: { id: profile.id, email: profile.email, user_metadata: { full_name: profile.full_name } } }
+}
+
+export async function signUp({ phone, passcode, fullName, email, upiId }) {
+  if (String(passcode).length !== 6) throw new Error('Passcode must contain six digits.')
+  const profile = {
+    id: `MOCK-${Date.now()}-${nextUserId++}`,
+    full_name: String(fullName).trim(),
+    email: String(email).trim().toLowerCase(),
+    phone: String(phone).trim(),
+    upi_id: String(upiId).trim(),
+    user_type: USER_ROLES.PLAYER,
+    active: true,
+    is_blocked: false,
+    created_at: new Date().toISOString(),
   }
-
-  return data
+  saveUserProfile(profile)
+  const session = makeSession(profile)
+  writeSession(session)
+  return { user: session.user, session }
 }
 
-export async function signIn({ phone, passcode }) {
-  const { data, error } = await getSupabaseClient().auth.signInWithPassword({
-    phone: normalizePhone(phone),
-    password: passcode,
-  })
-
-  if (error) throw error
-  if (!data.user) throw new Error('Authentication succeeded without a user account.')
-
-  await requireActiveProfile(data.user.id)
-  return data
-}
-
-export async function verifyPhoneOtp({ phone, token }) {
-  const { data, error } = await getSupabaseClient().auth.verifyOtp({
-    phone: normalizePhone(phone),
-    token,
-    type: 'sms',
-  })
-
-  if (error) throw error
-  if (!data.user) throw new Error('Phone verification succeeded without a user account.')
-
-  await requireActiveProfile(data.user.id)
-  return data
+export async function signIn({ email, passcode }) {
+  if (!String(email).trim() || !String(passcode).trim()) throw new Error('Enter your email and passcode.')
+  const normalizedEmail = String(email).trim().toLowerCase()
+  const profile = await getUserProfile(normalizedEmail === adminUser.email ? adminUser.id : player.id)
+  if (!profile) throw new Error('No local demo profile is available.')
+  if (profile.is_blocked || !profile.active) throw new Error('This account cannot sign in.')
+  const session = makeSession(profile)
+  writeSession(session)
+  return { user: session.user, session }
 }
 
 export async function signOut() {
-  const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' })
-  if (error) throw error
+  writeSession(null)
 }
 
-export function getSession() {
-  return getSupabaseClient().auth.getSession()
+export async function getSession() {
+  return { data: { session: readStoredSession() }, error: null }
 }
 
 export function onAuthStateChange(callback) {
-  return getSupabaseClient().auth.onAuthStateChange(callback)
+  listeners.add(callback)
+  return { data: { subscription: { unsubscribe: () => listeners.delete(callback) } } }
 }

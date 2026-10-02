@@ -1,121 +1,38 @@
-import { getSupabaseClient } from '../lib/supabase'
+import { getCurrentUserId } from './userService'
+import { makeId, mockStore, now } from './mockStore'
 
-const supportTicketFields = `
-  id,
-  user_id,
-  subject,
-  category,
-  description,
-  status,
-  resolution,
-  image_path,
-  created_at,
-  updated_at
-`
-
-async function requireUser(client) {
-  const { data: { user }, error } = await client.auth.getUser()
-  if (error) throw error
-  if (!user) throw new Error('Sign in to access support tickets.')
-  return user
-}
-
-async function includeSignedImage(client, ticket) {
-  if (!ticket.image_path) return { ...ticket, image_url: null }
-
-  const { data, error } = await client.storage
-    .from('support_images')
-    .createSignedUrl(ticket.image_path, 600)
-
-  if (error) throw error
-  return { ...ticket, image_url: data.signedUrl }
+function withUser(ticket) {
+  const user = mockStore.users.find(item => item.id === ticket.user_id)
+  return { ...ticket, user: user ? { full_name: user.full_name, phone: user.phone } : null }
 }
 
 export async function getMySupportTickets() {
-  const client = getSupabaseClient()
-  const user = await requireUser(client)
-  const { data, error } = await client
-    .from('support_tickets')
-    .select(supportTicketFields)
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-
-  if (error) throw error
-  return Promise.all(data.map(ticket => includeSignedImage(client, ticket)))
+  const userId = getCurrentUserId()
+  return mockStore.supportTickets
+    .filter(ticket => ticket.user_id === userId)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .map(ticket => ({ ...ticket, image_url: ticket.image_url || null }))
 }
 
 export async function createSupportTicket({ subject, category, description, imageFile }) {
-  const client = getSupabaseClient()
-  const user = await requireUser(client)
-  const ticketId = crypto.randomUUID()
-  let imagePath = null
-
-  if (imageFile && imageFile.size > 0) {
-    const extensionByType = {
-      'image/jpeg': 'jpg',
-      'image/png': 'png',
-      'image/webp': 'webp',
-    }
-    const extension = extensionByType[imageFile.type]
-    if (!extension) throw new Error('Support image must be a JPEG, PNG, or WebP image.')
-    if (imageFile.size > 10 * 1024 * 1024) {
-      throw new Error('Support image must be smaller than 10 MB.')
-    }
-
-    imagePath = `${user.id}/${ticketId}/${crypto.randomUUID()}.${extension}`
-    const { error: uploadError } = await client.storage
-      .from('support_images')
-      .upload(imagePath, imageFile, { contentType: imageFile.type, upsert: false })
-    if (uploadError) throw uploadError
+  const ticket = {
+    id: makeId('TK'), user_id: getCurrentUserId(), subject: String(subject).trim(), category,
+    description: String(description).trim(), status: 'OPEN', resolution: null, created_at: now(),
+    image_url: typeof File !== 'undefined' && imageFile instanceof File ? URL.createObjectURL(imageFile) : null,
   }
-
-  try {
-    const { data: createdId, error } = await client.rpc('create_support_ticket', {
-      p_ticket_id: ticketId,
-      p_subject: subject,
-      p_category: category,
-      p_description: description,
-      p_image_path: imagePath,
-    })
-    if (error) throw error
-    return createdId
-  } catch (error) {
-    if (imagePath) {
-      const { error: cleanupError } = await client.storage
-        .from('support_images')
-        .remove([imagePath])
-      if (cleanupError) {
-        throw new Error(
-          `Ticket creation failed and the uploaded image could not be removed: ${cleanupError.message}`,
-          { cause: error },
-        )
-      }
-    }
-    throw error
-  }
+  mockStore.supportTickets.unshift(ticket)
+  return ticket.id
 }
 
 export async function getAdminSupportTickets() {
-  const client = getSupabaseClient()
-  await requireUser(client)
-  const { data, error } = await client
-    .from('support_tickets')
-    .select(`${supportTicketFields}, user:users!support_tickets_user_id_fkey(full_name, phone)`)
-    .order('created_at', { ascending: false })
-
-  if (error) throw error
-  return Promise.all(data.map(ticket => includeSignedImage(client, ticket)))
+  return mockStore.supportTickets.map(withUser)
 }
 
 export async function updateSupportTicket({ ticketId, status, resolution }) {
-  const client = getSupabaseClient()
-  await requireUser(client)
-  const { data, error } = await client.rpc('update_support_ticket', {
-    p_ticket_id: ticketId,
-    p_status: status,
-    p_resolution: resolution,
-  })
-
-  if (error) throw error
-  return data
+  const ticket = mockStore.supportTickets.find(item => item.id === ticketId)
+  if (!ticket) throw new Error('Support ticket could not be found.')
+  ticket.status = status
+  ticket.resolution = resolution || null
+  ticket.updated_at = now()
+  return ticket.id
 }

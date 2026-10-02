@@ -1,53 +1,47 @@
-import { getSupabaseClient } from '../lib/supabase'
+import { users } from '../data/users'
 
-const profileColumns = [
-  'id',
-  'full_name',
-  'phone',
-  'email',
-  'dob',
-  'gender',
-  'upi_id',
-  'user_type',
-  'active',
-  'is_blocked',
-].join(',')
+const PROFILE_KEY = 'playnexa.mock-profiles'
 
-const editableProfileFields = new Set(['full_name', 'dob', 'gender', 'upi_id'])
-
-export async function getUserProfile(userId) {
-  const { data, error } = await getSupabaseClient()
-    .from('users')
-    .select(profileColumns)
-    .eq('id', userId)
-    .single()
-
-  if (error) throw error
-  return data
+function loadSavedProfiles() {
+  try {
+    const savedProfiles = JSON.parse(localStorage.getItem(PROFILE_KEY) || '[]')
+    return Array.isArray(savedProfiles) ? savedProfiles : []
+  } catch {
+    return []
+  }
 }
 
-export async function updateOwnProfile(updates) {
-  const client = getSupabaseClient()
-  const { data: { user }, error: userError } = await client.auth.getUser()
+const profiles = new Map([...users, ...loadSavedProfiles()].map(user => [user.id, { ...user }]))
 
-  if (userError) throw userError
-  if (!user) throw new Error('You must be signed in to update your profile.')
+function saveProfiles() {
+  localStorage.setItem(PROFILE_KEY, JSON.stringify([...profiles.values()]))
+}
 
-  const safeUpdates = Object.fromEntries(
-    Object.entries(updates).filter(([field]) => editableProfileFields.has(field)),
-  )
+export async function getUserProfile(userId) {
+  return profiles.get(userId) || null
+}
 
-  if (Object.keys(safeUpdates).length === 0) {
-    throw new Error('No editable profile fields were provided.')
+export function getCurrentUserId() {
+  try {
+    return JSON.parse(localStorage.getItem('playnexa.mock-session') || 'null')?.user?.id || null
+  } catch {
+    return null
   }
+}
 
-  const { data, error } = await client
-    .from('users')
-    .update(safeUpdates)
-    .eq('id', user.id)
-    .select(profileColumns)
-    .single()
+export function saveUserProfile(profile) {
+  profiles.set(profile.id, { ...profile })
+  saveProfiles()
+  return profiles.get(profile.id)
+}
 
-  if (error) throw error
-  return data
+export async function updateOwnProfile(userId, updates) {
+  const profile = profiles.get(userId)
+  if (!profile) throw new Error('That profile could not be found.')
+  const editableFields = ['full_name', 'dob', 'gender', 'upi_id']
+  const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => editableFields.includes(key)))
+  const updatedProfile = { ...profile, ...safeUpdates }
+  profiles.set(userId, updatedProfile)
+  saveProfiles()
+  return updatedProfile
 }

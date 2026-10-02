@@ -1,13 +1,5 @@
-import { getSupabaseClient } from '../lib/supabase'
+import { mockStore } from './mockStore'
 
 export async function getPlayableGames() {
-  const { data, error } = await getSupabaseClient()
-    .from('games')
-    .select('id, slug, name, category, minimum_entry, maximum_entry, image_url')
-    .eq('is_active', true)
-    .eq('is_open', true)
-    .order('name')
-
-  if (error) throw error
-  return data
+  return mockStore.games.filter(game => game.is_active && game.is_open)
 }

@@ -1,265 +1,147 @@
-import { getSupabaseClient } from '../lib/supabase'
+import { calculateMatchFinancials } from '../utils/matchFinancials'
+import { MATCH_STATUS } from '../constants/matchStatus'
+import { getCurrentUserId } from './userService'
+import { creditWallet, debitWallet, refundWallet } from './walletService'
+import { makeId, mockStore, notifyMatchChange, now } from './mockStore'
 
-const matchDetails = `
-  id,
-  status,
-  entry_amount,
-  prize_pool,
-  platform_fee,
-  winner_amount,
-  host_user_id,
-  opponent_user_id,
-  winner_user_id,
-  winner_claimed_by,
-  winner_claim_status,
-  winner_claim_path,
-  dispute_reason,
-  dispute_screenshot_path,
-  settled_at,
-  created_at,
-  started_at,
-  finished_at,
-  game:games!inner(id, slug, name, category, image_url)
-`
+function findMatch(matchId) {
+  const match = mockStore.matches.find(item => item.id === matchId)
+  if (!match) throw new Error('Match could not be found.')
+  return match
+}
 
-function newIdempotencyKey() {
-  return crypto.randomUUID()
+function withGame(match) {
+  const game = mockStore.games.find(item => item.id === match.game_id)
+  return { ...match, game: game ? { ...game } : { name: 'Game', slug: '' } }
 }
 
 export async function getOpenMatches(gameId) {
-  const { data, error } = await getSupabaseClient()
-    .from('game_matches')
-    .select(matchDetails)
-    .eq('game_id', gameId)
-    .eq('status', 'active')
-    .order('created_at', { ascending: true })
-
-  if (error) throw error
-  return data
+  return mockStore.matches
+    .filter(match => match.game_id === gameId && match.status === MATCH_STATUS.OPEN)
+    .map(match => withGame(match))
 }
 
-export async function createMatch({ gameId, entryAmount, idempotencyKey = newIdempotencyKey() }) {
-  const { data, error } = await getSupabaseClient()
-    .rpc('create_match', {
-      p_game_id: gameId,
-      p_entry_amount: entryAmount,
-      p_idempotency_key: idempotencyKey,
-    })
-
-  if (error) throw error
-  return data
+export async function createMatch({ gameId, entryAmount }) {
+  const userId = getCurrentUserId()
+  await debitWallet({ userId, amount: entryAmount, description: 'Match entry reserved' })
+  const match = {
+    id: makeId('NX'), game_id: gameId, status: MATCH_STATUS.OPEN, entry_amount: Number(entryAmount), prize_pool: 0,
+    platform_fee: 0, winner_amount: 0, host_user_id: userId, opponent_user_id: null,
+    winner_claimed_by: null, winner_claim_status: null, winner_claim_path: null, winner_claim_image_url: null,
+    dispute_reason: null, dispute_screenshot_url: null, room_code: null, created_at: now(), started_at: null, finished_at: null,
+  }
+  mockStore.matches.unshift(match)
+  notifyMatchChange(match.id)
+  return match.id
 }
 
-export async function joinMatch({ matchId, idempotencyKey = newIdempotencyKey() }) {
-  const { data, error } = await getSupabaseClient()
-    .rpc('join_match', {
-      p_match_id: matchId,
-      p_idempotency_key: idempotencyKey,
-    })
-
-  if (error) throw error
-  return data
-}
-
-export async function submitRoomCode({ matchId, roomCode }) {
-  const { error } = await getSupabaseClient()
-    .rpc('submit_room_code', {
-      p_match_id: matchId,
-      p_room_code: roomCode,
-    })
-
-  if (error) throw error
-}
-
-export async function leaveMatch({ matchId }) {
-  const { data, error } = await getSupabaseClient()
-    .rpc('leave_match', { p_match_id: matchId })
-
-  if (error) throw error
-  return data
-}
-
-export async function cancelMatch({ matchId }) {
-  const { data, error } = await getSupabaseClient()
-    .rpc('cancel_match', { p_match_id: matchId })
-
-  if (error) throw error
-  return data
-}
-
-export async function submitWinnerClaim({ matchId, proofFile }) {
-  return uploadMatchEvidence({
-    matchId,
-    proofFile,
-    bucket: 'game_winners',
-    rpc: 'submit_winner_claim',
-    args: path => ({ p_match_id: matchId, p_screenshot_path: path }),
+export async function joinMatch({ matchId }) {
+  const match = findMatch(matchId)
+  if (match.status !== MATCH_STATUS.OPEN || match.host_user_id === getCurrentUserId()) throw new Error('This match is no longer available.')
+  await debitWallet({ userId: getCurrentUserId(), amount: match.entry_amount, description: 'Match entry' })
+  const financials = calculateMatchFinancials(match.entry_amount, match.entry_amount)
+  Object.assign(match, {
+    opponent_user_id: getCurrentUserId(), status: MATCH_STATUS.IN_PROGRESS, prize_pool: financials.grossPool,
+    platform_fee: financials.platformFee, winner_amount: financials.winnerAmount, started_at: now(),
   })
-}
-
-export async function submitMatchDispute({ matchId, reason, proofFile }) {
-  return uploadMatchEvidence({
-    matchId,
-    proofFile,
-    bucket: 'game_disputes',
-    rpc: 'submit_match_dispute',
-    args: path => ({ p_match_id: matchId, p_reason: reason, p_screenshot_path: path }),
-  })
-}
-
-async function uploadMatchEvidence({ matchId, proofFile, bucket, rpc, args }) {
-  const client = getSupabaseClient()
-  const { data: { user }, error: authError } = await client.auth.getUser()
-
-  if (authError) throw authError
-  if (!user) throw new Error('Sign in to submit match evidence.')
-  if (typeof File === 'undefined' || !(proofFile instanceof File)) {
-    throw new Error('Select a screenshot to upload.')
-  }
-  const extensionByType = {
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/webp': 'webp',
-  }
-  const extension = extensionByType[proofFile.type]
-  if (!extension) throw new Error('Screenshot must be a JPEG, PNG, or WebP image.')
-  if (proofFile.size === 0 || proofFile.size > 10 * 1024 * 1024) {
-    throw new Error('Screenshot must be smaller than 10 MB.')
-  }
-
-  const path = `${user.id}/${matchId}/${crypto.randomUUID()}.${extension}`
-  const { error: uploadError } = await client.storage
-    .from(bucket)
-    .upload(path, proofFile, { contentType: proofFile.type, upsert: false })
-
-  if (uploadError) throw uploadError
-
-  try {
-    const { data, error } = await client.rpc(rpc, args(path))
-    if (error) throw error
-    return data
-  } catch (error) {
-    const { error: cleanupError } = await client.storage.from(bucket).remove([path])
-    if (cleanupError) {
-      throw new Error(
-        `Evidence submission failed and the uploaded screenshot could not be removed: ${cleanupError.message}`,
-        { cause: error },
-      )
-    }
-    throw error
-  }
+  notifyMatchChange(match.id)
+  return match.id
 }
 
 export async function getMatch(matchId) {
-  const { data, error } = await getSupabaseClient()
-    .from('game_matches')
-    .select(matchDetails)
-    .eq('id', matchId)
-    .single()
+  return withGame(findMatch(matchId))
+}
 
-  if (error) throw error
-  const [winnerEvidence, disputeEvidence] = await Promise.all([
-    data.winner_claim_path
-      ? getSupabaseClient().storage.from('game_winners').createSignedUrl(data.winner_claim_path, 600)
-      : Promise.resolve({ data: null, error: null }),
-    data.dispute_screenshot_path
-      ? getSupabaseClient().storage.from('game_disputes').createSignedUrl(data.dispute_screenshot_path, 600)
-      : Promise.resolve({ data: null, error: null }),
-  ])
-  if (winnerEvidence.error) throw winnerEvidence.error
-  if (disputeEvidence.error) throw disputeEvidence.error
+export async function submitRoomCode({ matchId, roomCode }) {
+  const match = findMatch(matchId)
+  match.room_code = String(roomCode).trim()
+  notifyMatchChange(matchId)
+}
 
-  return {
-    ...data,
-    winner_claim_image_url: winnerEvidence.data?.signedUrl || null,
-    dispute_screenshot_url: disputeEvidence.data?.signedUrl || null,
+function localImage(proofFile) {
+  return typeof File !== 'undefined' && proofFile instanceof File ? URL.createObjectURL(proofFile) : null
+}
+
+export async function submitWinnerClaim({ matchId, proofFile }) {
+  const match = findMatch(matchId)
+  match.winner_claimed_by = getCurrentUserId()
+  match.winner_claim_status = 'PENDING'
+  match.winner_claim_path = proofFile?.name || null
+  match.winner_claim_image_url = localImage(proofFile)
+  notifyMatchChange(matchId)
+}
+
+export async function submitMatchDispute({ matchId, reason, proofFile }) {
+  const match = findMatch(matchId)
+  match.dispute_reason = String(reason).trim()
+  match.dispute_screenshot_url = localImage(proofFile)
+  match.status = MATCH_STATUS.DISPUTED
+  notifyMatchChange(matchId)
+}
+
+async function refundMatchEntry(match, userId) {
+  await refundWallet({ userId, amount: match.entry_amount, description: 'Match entry refund' })
+}
+
+export async function leaveMatch({ matchId }) {
+  const match = findMatch(matchId)
+  if (match.opponent_user_id !== getCurrentUserId() || match.room_code) throw new Error('This match can no longer be left.')
+  await refundMatchEntry(match, match.opponent_user_id)
+  match.opponent_user_id = null
+  match.status = MATCH_STATUS.OPEN
+  match.started_at = null
+  match.prize_pool = 0
+  match.platform_fee = 0
+  match.winner_amount = 0
+  notifyMatchChange(matchId)
+}
+
+export async function cancelMatch({ matchId }) {
+  const match = findMatch(matchId)
+  if (match.host_user_id !== getCurrentUserId() || match.opponent_user_id || match.room_code) throw new Error('This match can no longer be cancelled.')
+  await refundMatchEntry(match, match.host_user_id)
+  match.status = MATCH_STATUS.CANCELLED
+  notifyMatchChange(matchId)
+}
+
+export function subscribeToLobby(gameId, callback) {
+  const handler = event => {
+    const match = mockStore.matches.find(item => item.id === event.detail.matchId)
+    if (match?.game_id === gameId) callback({ event: 'UPDATE', match })
   }
+  window.addEventListener('playnexa:match-change', handler)
+  return () => window.removeEventListener('playnexa:match-change', handler)
+}
+
+export function subscribeToMatch(matchId, callback) {
+  const handler = event => { if (event.detail.matchId === matchId) callback(event) }
+  window.addEventListener('playnexa:match-change', handler)
+  return () => window.removeEventListener('playnexa:match-change', handler)
 }
 
 export async function getSettlementQueue() {
-  const client = getSupabaseClient()
-  const { data, error } = await client
-    .from('game_matches')
-    .select(`
-      id, status, entry_amount, prize_pool, winner_amount,
-      host_user_id, opponent_user_id, winner_claimed_by,
-      winner_claim_status, winner_claim_path, dispute_reason,
-      dispute_screenshot_path, game:games!inner(name, slug)
-    `)
-    .in('status', ['completed', 'disputed', 'under_review'])
-    .or('winner_claim_status.eq.PENDING,dispute_reason.not.is.null')
-    .order('created_at', { ascending: true })
-
-  if (error) throw error
-
-  return Promise.all(data.map(async match => {
-    const [winnerEvidence, disputeEvidence] = await Promise.all([
-      match.winner_claim_path
-        ? client.storage.from('game_winners').createSignedUrl(match.winner_claim_path, 600)
-        : Promise.resolve({ data: null, error: null }),
-      match.dispute_screenshot_path
-        ? client.storage.from('game_disputes').createSignedUrl(match.dispute_screenshot_path, 600)
-        : Promise.resolve({ data: null, error: null }),
-    ])
-    if (winnerEvidence.error) throw winnerEvidence.error
-    if (disputeEvidence.error) throw disputeEvidence.error
-    return {
-      ...match,
-      winner_claim_image_url: winnerEvidence.data?.signedUrl || null,
-      dispute_screenshot_url: disputeEvidence.data?.signedUrl || null,
-    }
-  }))
+  return mockStore.settlementMatches.map(match => ({ ...match }))
 }
 
 export async function declareMatchWinner({ matchId, winnerUserId }) {
-  return callMatchFunction('declare_match_winner', {
-    p_match_id: matchId,
-    p_winner_user_id: winnerUserId,
-  })
+  const match = mockStore.settlementMatches.find(item => item.id === matchId)
+  if (!match) throw new Error('Settlement could not be found.')
+  match.status = MATCH_STATUS.COMPLETED
+  match.winner_claim_status = 'APPROVED'
+  await creditWallet({ userId: winnerUserId, amount: match.winner_amount, description: 'Match winnings' })
 }
 
 export async function refundMatchPlayers(matchId) {
-  return callMatchFunction('refund_match_players', { p_match_id: matchId })
+  const match = mockStore.settlementMatches.find(item => item.id === matchId)
+  if (!match) throw new Error('Settlement could not be found.')
+  await Promise.all([match.host_user_id, match.opponent_user_id].filter(Boolean).map(userId => refundWallet({
+    userId, amount: match.entry_amount, description: 'Match refund',
+  })))
+  match.status = MATCH_STATUS.CANCELLED
 }
 
 export async function rejectMatchWinnerClaim(matchId) {
-  return callMatchFunction('reject_match_winner_claim', { p_match_id: matchId })
-}
-
-async function callMatchFunction(functionName, args) {
-  const { data, error } = await getSupabaseClient().rpc(functionName, args)
-  if (error) throw error
-  return data
-}
-export function subscribeToLobby(gameId, onChange) {
-  const client = getSupabaseClient()
-  const channel = client
-    .channel(`game-lobby:${gameId}`, { config: { private: true } })
-    .on('broadcast', { event: '*' }, onChange)
-    .subscribe()
-
-  return () => {
-    void client.removeChannel(channel)
-  }
-}
-
-export function subscribeToMatch(matchId, onChange) {
-  const client = getSupabaseClient()
-  const channel = client
-    .channel(`match:${matchId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'game_matches',
-        filter: `id=eq.${matchId}`,
-      },
-      onChange,
-    )
-    .subscribe()
-
-  return () => {
-    void client.removeChannel(channel)
-  }
+  const match = mockStore.settlementMatches.find(item => item.id === matchId)
+  if (!match) throw new Error('Settlement could not be found.')
+  match.winner_claim_status = 'REJECTED'
 }

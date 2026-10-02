@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowDownLeft, ArrowUpRight, Gamepad2, Headphones, Plus, ShieldCheck, Swords, Trophy, Wallet as WalletIcon } from 'lucide-react'
-import { Button, ConfirmModal, CopyButton, DataState, FormField, Modal, PageTitle, Panel, Status } from './components'
-import { useAuth } from './contexts/useAuth'
-import { formatINR, games, matches, player, transactions } from './data'
-import { getPlayableGames } from './services/gameService'
-import { cancelMatch, createMatch as createMatchRequest, getMatch, getOpenMatches, joinMatch as joinMatchRequest, leaveMatch, submitMatchDispute, submitRoomCode, submitWinnerClaim, subscribeToLobby, subscribeToMatch } from './services/matchService'
-import { createWithdrawal, getMyWalletOverview } from './services/walletService'
-import { completeMockPayment, createPaymentOrder, getActiveManualUpiMethod, submitManualDeposit } from './services/paymentService'
-import { createSupportTicket, getMySupportTickets } from './services/supportService'
+import { Button, ConfirmModal, CopyButton, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common'
+import { useAuth } from '../../hooks/useAuth'
+import { formatINR, games, matches, player, transactions } from '../../data'
+import { getPlayableGames } from '../../services/gameService'
+import { cancelMatch, createMatch as createMatchRequest, getMatch, getOpenMatches, joinMatch as joinMatchRequest, leaveMatch, submitMatchDispute, submitRoomCode, submitWinnerClaim, subscribeToLobby, subscribeToMatch } from '../../services/matchService'
+import { createWithdrawal, getMyWalletOverview } from '../../services/walletService'
+import { completeMockPayment, createPaymentOrder, getActiveManualUpiMethod, submitManualDeposit } from '../../services/paymentService'
+import { createSupportTicket, getMySupportTickets } from '../../services/supportService'
 
 function Stat({ icon: Icon, label, value, note, accent = '' }) {
   return <article className="stat-card"><span className={`stat-icon ${accent}`}><Icon size={18}/></span><small>{label}</small><strong>{value}</strong>{note && <span className="stat-note">{note}</span>}</article>
@@ -614,7 +614,7 @@ export function SupportPage({notify}) {
 }
 
 export function AuthPage({mode,onSuccess}) {
-  const navigate=useNavigate(); const location=useLocation(); const {login,signup:register,verifyPhone,authError}=useAuth(); const signup=mode==='signup'; const forgot=mode==='forgot-password'; const [sent,setSent]=useState(false); const [submitting,setSubmitting]=useState(false); const [formError,setFormError]=useState(''); const [sentMessage,setSentMessage]=useState(''); const [pendingPhone,setPendingPhone]=useState(''); const [verificationCode,setVerificationCode]=useState('')
+  const navigate=useNavigate(); const location=useLocation(); const {login,signup:register,authError}=useAuth(); const signup=mode==='signup'; const forgot=mode==='forgot-password'; const [sent,setSent]=useState(false); const [submitting,setSubmitting]=useState(false); const [formError,setFormError]=useState(''); const [sentMessage,setSentMessage]=useState('')
   const title=signup?'Create your account':forgot?'Reset your passcode':'Welcome back'
   async function submit(event){
     event.preventDefault()
@@ -625,11 +625,11 @@ export function AuthPage({mode,onSuccess}) {
     try {
       if(signup){
         const values=new FormData(event.currentTarget)
-        const result=await register({phone:values.get('phone'),passcode:values.get('passcode'),fullName:values.get('fullName'),email:values.get('email'),dob:values.get('dob'),gender:values.get('gender'),upiId:values.get('upi')})
-        if(!result.session){setPendingPhone(values.get('phone'));setSent(true);setSentMessage('Enter the verification code sent to your phone to finish creating your account.');return}
+        const result=await register({phone:values.get('phone'),passcode:values.get('passcode'),fullName:values.get('fullName'),email:values.get('email'),upiId:values.get('upi')})
+        if(!result.session){setSent(true);setSentMessage('Check your email for a confirmation link to finish creating your account.');return}
         onSuccess?.('Your account is ready.')
       }else{
-        await login({phone:new FormData(event.currentTarget).get('phone'),passcode:new FormData(event.currentTarget).get('passcode')})
+        await login({email:new FormData(event.currentTarget).get('email'),passcode:new FormData(event.currentTarget).get('passcode')})
         onSuccess?.('Signed in successfully.')
       }
       const destination=location.state?.from
@@ -640,19 +640,5 @@ export function AuthPage({mode,onSuccess}) {
       setSubmitting(false)
     }
   }
-  async function verifySignup(event){
-    event.preventDefault()
-    setSubmitting(true)
-    setFormError('')
-    try{
-      await verifyPhone({phone:pendingPhone,token:verificationCode})
-      onSuccess?.('Your account is ready.')
-      navigate('/dashboard',{replace:true})
-    }catch(error){
-      setFormError(error instanceof Error?error.message:'Phone verification failed. Please try again.')
-    }finally{
-      setSubmitting(false)
-    }
-  }
-  return <div className="auth-layout"><Link to="/login" className="brand"><span className="brand-mark">✦</span><span>play<span>nexa</span></span></Link><div className="auth-card"><div className="eyebrow">PLAY NEXA · SKILL GAMING</div><h1>{title}</h1><p>{forgot?'We’ll help you securely get back into your account.':signup?'Join the community and put your skills to the test.':'Sign in securely with your registered phone number.'}</p>{(formError||(!sent&&!signup&&!forgot&&authError))&&<p className="auth-error" role="alert">{formError||authError}</p>}{sent?<><div className="notice"><ShieldCheck size={18}/><p>{sentMessage}</p></div>{pendingPhone&&<form className="form-stack" onSubmit={verifySignup}><FormField label="6-digit verification code"><input name="verificationCode" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={verificationCode} onChange={event=>setVerificationCode(event.target.value)} placeholder="••••••" required/></FormField><Button type="submit" disabled={submitting} className="auth-submit">{submitting?'Please wait…':'Verify phone'} →</Button></form>}</>:<form className="form-stack" onSubmit={submit}>{signup&&<FormField label="Full name"><input name="fullName" placeholder="e.g. Aarav Mehta" required/></FormField>}<FormField label="Phone number"><div className="phone-input"><span>🇮🇳 +91</span><input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" placeholder="98765 43210" required/></div></FormField>{signup&&<><FormField label="Email address"><input name="email" type="email" placeholder="you@example.com" required/></FormField><div className="form-grid"><FormField label="Date of birth"><input name="dob" type="date" required/></FormField><FormField label="Gender"><select name="gender" defaultValue=""><option value="" disabled>Select</option><option>Female</option><option>Male</option><option>Non-binary</option><option>Prefer not to say</option></select></FormField></div><FormField label="UPI ID"><input name="upi" placeholder="name@bank" required/></FormField></>}{!forgot&&<FormField label="6-digit passcode"><input name="passcode" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" placeholder="••••••" required/></FormField>}{signup&&<FormField label="Confirm passcode"><input name="confirmPasscode" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" placeholder="••••••" required onInput={event=>event.currentTarget.setCustomValidity('')}/></FormField>}<Button type="submit" disabled={submitting} className="auth-submit">{submitting?'Please wait…':forgot?'Send reset instructions':signup?'Create account':'Sign in'} →</Button></form>}{!signup&&!forgot&&<Link className="auth-help" to="/forgot-password">Forgot passcode?</Link>}{!forgot&&<div className="auth-switch">{signup?'Already have an account?':'New to Play Nexa?'} <Link to={signup?'/login':'/signup'}>{signup?'Sign in':'Create account'}</Link></div>}{forgot&&!sent&&<div className="auth-switch"><Link to="/login">← Back to sign in</Link></div>}<small className="auth-safe"><ShieldCheck size={14}/> {forgot?'Passcode recovery is not connected yet.':'Protected by Supabase Auth.'}</small></div><span className="auth-footer">© 2026 Play Nexa · Play fair. Play smart.</span></div>
+  return <div className="auth-layout"><Link to="/login" className="brand"><span className="brand-mark">✦</span><span>play<span>nexa</span></span></Link><div className="auth-card"><div className="eyebrow">PLAY NEXA · SKILL GAMING</div><h1>{title}</h1><p>{forgot?'We’ll help you securely get back into your account.':signup?'Join the community and put your skills to the test.':'Sign in securely with your email address.'}</p>{(formError||(!sent&&!signup&&!forgot&&authError))&&<p className="auth-error" role="alert">{formError||authError}</p>}{sent?<div className="notice"><ShieldCheck size={18}/><p>{sentMessage}</p></div>:<form className="form-stack" onSubmit={submit}>{signup&&<><FormField label="Full name"><input name="fullName" placeholder="e.g. Aarav Mehta" required/></FormField><FormField label="Phone number"><div className="phone-input"><span>🇮🇳 +91</span><input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" placeholder="98765 43210" required/></div></FormField></>}<FormField label="Email address"><input name="email" type="email" placeholder="you@example.com" required/></FormField>{signup&&<FormField label="UPI ID"><input name="upi" placeholder="name@bank" required/></FormField>}{!forgot&&<FormField label="6-digit passcode"><input name="passcode" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" placeholder="••••••" required/></FormField>}{signup&&<FormField label="Confirm passcode"><input name="confirmPasscode" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" placeholder="••••••" required onInput={event=>event.currentTarget.setCustomValidity('')}/></FormField>}<Button type="submit" disabled={submitting} className="auth-submit">{submitting?'Please wait…':forgot?'Send reset instructions':signup?'Create account':'Sign in'} →</Button></form>}{!signup&&!forgot&&<Link className="auth-help" to="/forgot-password">Forgot passcode?</Link>}{!forgot&&<div className="auth-switch">{signup?'Already have an account?':'New to Play Nexa?'} <Link to={signup?'/login':'/signup'}>{signup?'Sign in':'Create account'}</Link></div>}{forgot&&!sent&&<div className="auth-switch"><Link to="/login">← Back to sign in</Link></div>}<small className="auth-safe"><ShieldCheck size={14}/> {forgot?'Passcode recovery is not connected yet.':'Frontend demo · no backend connection.'}</small></div><span className="auth-footer">© 2026 Play Nexa · Play fair. Play smart.</span></div>
 }

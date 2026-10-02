@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, LoaderCircle, X } from 'lucide-react'
-import { formatINR } from './data'
+import { formatINR } from '../../utils/currency'
 
 export function Button({ children, variant = 'primary', className = '', ...props }) {
   return <button className={`btn btn-${variant} transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-indigo-400 ${className}`} {...props}>{children}</button>

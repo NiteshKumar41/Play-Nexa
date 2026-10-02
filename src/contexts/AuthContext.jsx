@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AuthContext } from './auth-context'
-import { getSession, onAuthStateChange, signIn, signOut, signUp, verifyPhoneOtp } from '../services/authService'
+import { getSession, onAuthStateChange, signIn, signOut, signUp } from '../services/authService'
 import { getUserProfile } from '../services/userService'
 
 function getProfileAccessError(profile) {
@@ -122,7 +122,6 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(credentials => signIn(credentials), [])
   const signup = useCallback(details => signUp(details), [])
-  const verifyPhone = useCallback(details => verifyPhoneOtp(details), [])
   const logout = useCallback(() => signOut(), [])
 
   return (
@@ -134,7 +133,6 @@ export function AuthProvider({ children }) {
       authError,
       login,
       signup,
-      verifyPhone,
       logout,
       refreshProfile,
     }}>

@@ -57,13 +57,13 @@ export function EmptyState({ title, description, action }) {
   return <div className="state-block empty-state"><span className="empty-mark">✦</span><strong>{title}</strong><p>{description}</p>{action}</div>
 }
 
-export function ErrorState({ onRetry }) {
-  return <div className="error-state" role="alert"><strong>We couldn’t load this section.</strong><span>Check your connection and try again.</span><Button variant="secondary" onClick={onRetry}>Try again</Button></div>
+export function ErrorState({ onRetry, message = 'Check your connection and try again.' }) {
+  return <div className="error-state" role="alert"><strong>We couldn’t load this section.</strong><span>{message}</span><Button variant="secondary" onClick={onRetry}>Try again</Button></div>
 }
 
 export function DataState({ loading, error, retry, empty, children }) {
   if (loading) return <LoadingBlock/>
-  if (error) return <ErrorState onRetry={retry}/>
+  if (error) return <ErrorState onRetry={retry} message={typeof error === 'string' ? error : undefined}/>
   if (empty) return <EmptyState title="Nothing here yet" description="New activity will show up here."/>
   return children
 }

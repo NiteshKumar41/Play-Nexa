@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, ShieldCheck } from 'lucide-react';
 import { Button, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common';
 import { formatINR } from '../../utils/currency';
 import { createWithdrawal, getTransactions, getWallet } from '../../services/walletService';
-import { getActiveManualUpiMethod, submitManualDeposit } from '../../services/paymentService';
+import { createRazorpayOrder, getActiveManualUpiMethod, loadRazorpayCheckout, submitManualDeposit, verifyRazorpayPayment } from '../../services/paymentService';
 import { subscribeToWalletUpdates } from '../../services/socketService';
 import { GameImage } from '../../components/games/GameImage'
 import { TransactionRows } from '../../components/wallet/TransactionList'
+import { RAZORPAY_KEY_ID } from '../../config/api'
+import { useAuth } from '../../hooks/useAuth'
 
 export function WalletPage({notify}) {
+  const { user } = useAuth()
   const [filter,setFilter]=useState('All')
   const [showAddMoney,setShowAddMoney]=useState(false)
   const [showWithdrawal,setShowWithdrawal]=useState(false)
@@ -16,6 +19,13 @@ export function WalletPage({notify}) {
   const [withdrawalError,setWithdrawalError]=useState('')
   const [withdrawalResult,setWithdrawalResult]=useState(null)
   const [paymentBusy,setPaymentBusy]=useState(false)
+  const [razorpayBusy,setRazorpayBusy]=useState(false)
+  const [razorpayError,setRazorpayError]=useState('')
+  const [verificationData,setVerificationData]=useState(null)
+  const razorpayLock=useRef(false)
+  const verificationLock=useRef(false)
+  const checkoutPaymentReceived=useRef(false)
+  const orderRequestId=useRef(null)
   const [paymentError,setPaymentError]=useState('')
   const [manualMethod,setManualMethod]=useState(null)
   const [manualMethodLoading,setManualMethodLoading]=useState(false)
@@ -101,6 +111,98 @@ export function WalletPage({notify}) {
       setPaymentBusy(false)
     }
   }
+  async function createRazorpayDeposit(event){
+    event.preventDefault()
+    if(razorpayLock.current)return
+    if(!RAZORPAY_KEY_ID){setRazorpayError('Online payments are not configured. Please use UPI or contact support.');return}
+    const amount=Number(new FormData(event.currentTarget).get('razorpayAmount'))
+    if(!Number.isFinite(amount)||amount<=0){setRazorpayError('Enter a valid amount.');return}
+    razorpayLock.current=true
+    setRazorpayBusy(true)
+    setRazorpayError('')
+    try{
+      const loaded=await loadRazorpayCheckout()
+      if(!loaded)throw new Error('Unable to load Razorpay Checkout. Please try again.')
+      if(!orderRequestId.current||orderRequestId.current.amount!==amount){
+        orderRequestId.current={amount,id:globalThis.crypto?.randomUUID?.()||`deposit-${Date.now()}-${Math.random().toString(36).slice(2)}`}
+      }
+      const order=await createRazorpayOrder({amount,clientRequestId:orderRequestId.current.id})
+      if(!order?.gatewayOrderId||!Number.isFinite(Number(order.amount))||Number(order.amount)<=0)throw new Error('The payment order response was incomplete. Retry to resume this request.')
+      const checkout=new window.Razorpay({
+        key:RAZORPAY_KEY_ID,
+        amount:Math.round(Number(order.amount)*100),
+        currency:'INR',
+        order_id:order.gatewayOrderId,
+        name:'PlayNexa',
+        description:'Add money to your PlayNexa wallet',
+        prefill:{
+          name:user?.fullName||user?.user_metadata?.full_name||'',
+          email:user?.email||'',
+          contact:user?.phone||'',
+        },
+        handler:async payment=>{
+          checkoutPaymentReceived.current=true
+          await verifyRazorpayIdentifiers({
+            razorpay_order_id:payment.razorpay_order_id,
+            razorpay_payment_id:payment.razorpay_payment_id,
+            razorpay_signature:payment.razorpay_signature,
+          })
+        },
+        modal:{
+          ondismiss:()=>{
+            razorpayLock.current=false
+            setRazorpayBusy(false)
+            if(!checkoutPaymentReceived.current){
+              setRazorpayError('Checkout was closed. Your transaction remains pending; retry the same request when ready.')
+              void loadWallet()
+            }
+          },
+        },
+        theme:{color:'#635bff'},
+      })
+      checkoutPaymentReceived.current=false
+      checkout.on('payment.failed',failure=>{
+        razorpayLock.current=false
+        setRazorpayBusy(false)
+        setRazorpayError(failure?.error?.description||'Payment failed. You can retry this deposit.')
+        void loadWallet()
+      })
+      checkout.open()
+    }catch(orderFailure){
+      razorpayLock.current=false
+      setRazorpayBusy(false)
+      setRazorpayError(orderFailure instanceof Error?orderFailure.message:'Unable to start Razorpay Checkout. Please retry.')
+    }
+  }
+  async function verifyRazorpayIdentifiers(identifiers){
+    if(verificationLock.current)return
+    verificationLock.current=true
+    setRazorpayBusy(true)
+    setRazorpayError('')
+    try{
+      const result=await verifyRazorpayPayment(identifiers)
+      if(result?.status==='SUCCESS'){
+        setVerificationData({transactionId:result.transactionId,status:'SUCCESS',identifiers})
+        orderRequestId.current=null
+        notify('Payment successful. PlayNexa verified the payment and refreshed your wallet.')
+      }else{
+        setVerificationData({identifiers})
+        setRazorpayError('Payment is not yet confirmed by PlayNexa. Your transaction remains pending; retry verification shortly.')
+      }
+    }catch(verificationFailure){
+      setVerificationData({identifiers})
+      setRazorpayError(verificationFailure instanceof Error?`${verificationFailure.message} Payment is not confirmed. Retry verification shortly.`:'Payment verification failed. Payment is not confirmed; retry verification shortly.')
+    }finally{
+      await loadWallet()
+      verificationLock.current=false
+      razorpayLock.current=false
+      setRazorpayBusy(false)
+    }
+  }
+  async function retryRazorpayVerification(){
+    if(!verificationData?.identifiers||verificationLock.current)return
+    await verifyRazorpayIdentifiers(verificationData.identifiers)
+  }
   function closePaymentModal(){
     if(paymentBusy)return
     setShowAddMoney(false)
@@ -127,6 +229,16 @@ export function WalletPage({notify}) {
     </Panel>
     {showAddMoney&&<Modal title="Add money" onClose={closePaymentModal}>
       {paymentError&&<p className="auth-error" role="alert">{paymentError}</p>}
+      {!manualDeposit&&<section className="form-stack" aria-label="Razorpay deposit">
+        <h3>Add money with Razorpay</h3>
+        {razorpayError&&<p className="auth-error" role="alert">{razorpayError}</p>}
+        {verificationData?.status==='SUCCESS'&&<p className="notice" role="status">Payment successful. Transaction {verificationData.transactionId?.slice(0,8)}.</p>}
+        {verificationData?.identifiers&&!verificationData.status&&<Button type="button" onClick={retryRazorpayVerification} disabled={razorpayBusy}>{razorpayBusy?'Verifying…':'Retry payment verification'}</Button>}
+        {!verificationData?.status&&<form className="form-stack" onSubmit={createRazorpayDeposit}>
+          <FormField label="Amount (₹)"><input name="razorpayAmount" type="number" min="1" max="100000" step="0.01" defaultValue="500" required disabled={razorpayBusy}/></FormField>
+          <Button type="submit" disabled={razorpayBusy}>{razorpayBusy?'Starting secure checkout…':'Pay securely with Razorpay'}</Button>
+        </form>}
+      </section>}
       {!manualDeposit&&<form className="form-stack" onSubmit={createManualDeposit}>
         <FormField label="Amount (₹)"><input name="amount" type="number" min="100" max="100000" step="0.01" defaultValue="500" required/></FormField>
         {manualMethodLoading?<div role="status">Loading active UPI method…</div>:manualMethod?<div className="manual-upi-details"><strong>{manualMethod.payeeName}</strong><span>Payee: {manualMethod.payeeName}</span><span>UPI ID: <strong>{manualMethod.upiId}</strong></span>{manualMethod.qrUrl&&<GameImage src={manualMethod.qrUrl} alt="Active UPI payment QR code" style={{width:180,maxHeight:180,objectFit:'contain',alignSelf:'center'}}/>}<p className="form-disclaimer">Pay the amount above using your UPI app, then upload the payment screenshot. Your deposit remains pending until admin review; it will not credit your wallet automatically.</p><FormField label="Payment screenshot"><input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required/></FormField></div>:<p role="status">No active UPI payment method is available. Contact support for help.</p>}

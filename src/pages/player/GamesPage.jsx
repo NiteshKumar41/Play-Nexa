@@ -164,15 +164,15 @@ export function Lobby({ notify }) {
   async function createMatch(entry){
     setSubmitting(true)
     try{
-      await createMatchRequest({
+      const matchId=await createMatchRequest({
         gameId:game.id,
         entryAmount:entry,
         clientRequestId:createRequestId.current || globalThis.crypto?.randomUUID?.(),
       })
       createRequestId.current=null
       setModal(false)
-      await loadLobby()
-      notify('Your match is open in the lobby.')
+      notify('Match created successfully.')
+      navigate(`/match/${matchId}`)
     }catch(createError){
       createRequestId.current=null
       notify(createError instanceof Error?createError.message:'Unable to create match.')
@@ -197,14 +197,15 @@ export function Lobby({ notify }) {
       setSubmitting(false)
     }
   }
+  const currentUserId=user?.id || user?._id
   const rows=openMatches.map(match=>({
     id:match.id,
     game:match.game.name,
-    creator:match.host_user_id===user?.id?'You':'Player waiting',
+    creator:currentUserId && String(match.host_user_id)===String(currentUserId)?'You':'Player waiting',
     entry:Number(match.entry_amount),
     pool:Number(match.prize_pool),
     status:'Open',
-    own:match.host_user_id===user?.id,
+    own:Boolean(currentUserId && String(match.host_user_id)===String(currentUserId)),
   }))
   return (
     <>

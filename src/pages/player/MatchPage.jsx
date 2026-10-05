@@ -208,10 +208,10 @@ export function MatchPage({notify}) {
   const isParticipant=creator||isOpponent
   const canClaimResult=isParticipant&&opponentJoined&&match.status==='in_progress'
   const canDisputeResult=isParticipant&&match.status==='completed'
-    &&result?.winnerClaimStatus==='PENDING'&&result.winnerClaimedBy!==user?.id
-  const resultWinnerName=result?.winnerPlayer===result?.player1
-    ?result.player1Name
-    :result?.winnerPlayer===result?.player2?result.player2Name:null
+    &&result?.winnerClaimStatus==='PENDING'&&result?.winnerClaimedBy!==user?.id
+  const resultWinnerName=result?.winnerPlayer
+    ?(result.winnerPlayer===result.player1?result.player1Name:result.winnerPlayer===result.player2?result.player2Name:null)
+    :null
   const name=profile?.full_name||player.name
   return (
     <>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Button, LoadingBlock } from '../components/common';
 import { useAuth } from '../hooks/useAuth';
+import { homePathForRole } from './roleRouting';
 
 export function RequireAuth() {
   const { loading, session, profile, authError, refreshProfile, logout } = useAuth();
@@ -46,5 +47,22 @@ export function RequireAdmin() {
   const { profile } = useAuth();
   return profile?.user_type === 'admin'
     ? <Outlet />
-    : <Navigate to="/dashboard" replace />;
+    : <Navigate to={homePathForRole(profile?.user_type)} replace />;
+}
+
+export function RequirePlayer() {
+  const { profile } = useAuth();
+
+  if (profile?.user_type === 'player') return <Outlet />;
+  if (profile?.user_type === 'admin') return <Navigate to="/admin" replace />;
+  return <Navigate to="/login" replace />;
+}
+
+export function RoleHomeRedirect() {
+  const { loading, session, profile } = useAuth();
+
+  if (loading) return <LoadingBlock label="Restoring your session…" />;
+  if (!session) return <Navigate to="/login" replace />;
+
+  return <Navigate to={homePathForRole(profile?.user_type)} replace />;
 }

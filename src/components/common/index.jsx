@@ -168,14 +168,37 @@ export function Currency({ value, signed = false }) {
   return <>{signed && value > 0 ? '+' : ''}{formatINR(value)}</>
 }
 
-export function CopyButton({ value, onCopied }) {
+export function CopyButton({ value, onCopied, onCopyError }) {
   const [isCopied, setIsCopied] = useState(false)
 
   async function handleCopy() {
+    let copied = false
+
     try {
-      await navigator.clipboard.writeText(value)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+        copied = true
+      } else if (document.body && document.execCommand) {
+        const textArea = document.createElement('textarea')
+        textArea.value = value
+        textArea.setAttribute('readonly', '')
+        textArea.style.position = 'fixed'
+        textArea.style.opacity = '0'
+        document.body.appendChild(textArea)
+        try {
+          textArea.select()
+          copied = document.execCommand('copy')
+        } finally {
+          textArea.remove()
+        }
+      }
     } catch {
-      // Clipboard access can be unavailable in a preview environment.
+      copied = false
+    }
+
+    if (!copied) {
+      onCopyError?.()
+      return
     }
 
     setIsCopied(true)
@@ -184,7 +207,7 @@ export function CopyButton({ value, onCopied }) {
   }
 
   return (
-    <button className="copy-btn" onClick={handleCopy}>
+    <button type="button" className="copy-btn" onClick={handleCopy}>
       {isCopied ? <Check size={15} /> : <Copy size={15} />}
       {isCopied ? 'Copied' : 'Copy code'}
     </button>

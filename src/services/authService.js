@@ -1,7 +1,18 @@
 import { apiClient } from './apiClient'
+import { normalizeAuthenticatedUser } from './authRole'
 import { clearAuthToken, getAuthToken, saveAuthToken } from './tokenStorage'
 
-function createAuthResult(data) {
+export { normalizeAuthenticatedUser }
+
+function createSession(user, token) {
+  return {
+    user,
+    token,
+    session: token ? { user, access_token: token } : null,
+  }
+}
+
+async function createAuthResult(data) {
   if (!data?.user) {
     throw new Error('The server returned an invalid authentication response.')
   }
@@ -10,10 +21,23 @@ function createAuthResult(data) {
   if (token) saveAuthToken(token)
   else clearAuthToken()
 
-  return {
-    user: data.user,
-    token,
-    session: token ? { user: data.user, access_token: token } : null,
+  try {
+    return createSession(normalizeAuthenticatedUser(data.user), token)
+  } catch (error) {
+    // Older login responses may contain a valid token but omit account fields.
+    // Resolve the identity from /auth/me, where the backend reloads the role
+    // from MongoDB. Never guess a missing role in the browser.
+    if (!token || !/invalid account role/i.test(error.message)) {
+      clearAuthToken()
+      throw error
+    }
+
+    try {
+      return createSession(await getCurrentUser(), token)
+    } catch {
+      clearAuthToken()
+      throw error
+    }
   }
 }
 
@@ -54,11 +78,23 @@ export async function getCurrentUser() {
   }
 
   const response = await apiClient.get('/auth/me')
-  if (!response.data?.user) {
+  if (response.data?.user) {
+    try {
+      return normalizeAuthenticatedUser(response.data.user)
+    } catch (error) {
+      if (!/invalid account role/i.test(error.message)) throw error
+    }
+  }
+
+  // Compatibility fallback for deployments where /auth/me still returns the
+  // legacy minimal user object. /profile/me is authenticated and reads the
+  // same database-backed role; it is not a client-side role source.
+  const profileResponse = await apiClient.get('/profile/me')
+  if (!profileResponse.data?.profile) {
     throw new Error('The server did not return your account details.')
   }
 
-  return response.data.user
+  return normalizeAuthenticatedUser(profileResponse.data.profile)
 }
 
 export async function logout() {

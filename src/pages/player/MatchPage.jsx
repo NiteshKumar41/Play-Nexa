@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button, ConfirmModal, CopyButton, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common';
 import { useAuth } from '../../hooks/useAuth';
-import { formatINR, player } from '../../data/mockData';
+import { formatINR } from '../../data/mockData';
 import { cancelMatch, getMatch, leaveMatch, updateRoomCode, subscribeToMatch } from '../../services/matchService';
+import { getLudoKingLaunchUrl, LUDO_KING_LINKS } from '../../services/ludoKingService';
 import { SOCKET_EVENTS } from '../../services/socketService';
 import { getResult, releaseResultEvidence, submitDispute, submitWinnerClaim } from '../../services/resultService';
 
@@ -56,6 +57,7 @@ export function MatchPage({notify}) {
   const [action,setAction]=useState('')
   const [submitting,setSubmitting]=useState(false)
   const [roomError,setRoomError]=useState('')
+  const [replacingRoomCode,setReplacingRoomCode]=useState(false)
   const [result,setResult]=useState(null)
   const [resultAction,setResultAction]=useState('')
   const [resultSubmitting,setResultSubmitting]=useState(false)
@@ -130,10 +132,13 @@ export function MatchPage({notify}) {
   async function handleRoomCodeSubmit(event){
     event.preventDefault()
     const form=new FormData(event.currentTarget)
+    const roomCode=String(form.get('roomCode')||'').trim()
     setSubmitting(true)
     setRoomError('')
     try{
-      await updateRoomCode(id,form.get('roomCode'))
+      await updateRoomCode(id,roomCode,{replaceExisting:replacingRoomCode})
+      setReplacingRoomCode(false)
+      notify(hasRoomCode?'Room code replaced.':'Room code saved.')
       await refreshMatch()
     }catch(submitError){
       setRoomError(submitError instanceof Error?submitError.message:'Unable to submit the room code.')
@@ -204,7 +209,9 @@ export function MatchPage({notify}) {
   const hasRoomCode=Boolean(match.room_code?.trim())
   const canLeave=isOpponent&&!hasRoomCode&&match.status==='in_progress'
   const canCancel=creator&&!opponentJoined&&!hasRoomCode&&match.status==='active'
-  const canSubmitRoom=creator&&opponentJoined&&match.status==='in_progress'
+  const canManageRoom=creator&&opponentJoined&&match.status==='in_progress'
+  const canSubmitRoom=canManageRoom&&(!hasRoomCode||replacingRoomCode)
+  const isLudoKingMatch=/ludo/i.test(match.game.name)
   const isParticipant=creator||isOpponent
   const canClaimResult=isParticipant&&opponentJoined&&match.status==='in_progress'
   const canDisputeResult=isParticipant&&match.status==='completed'
@@ -212,7 +219,7 @@ export function MatchPage({notify}) {
   const resultWinnerName=result?.winnerPlayer
     ?(result.winnerPlayer===result.player1?result.player1Name:result.winnerPlayer===result.player2?result.player2Name:null)
     :null
-  const name=profile?.full_name||player.name
+  const name=profile?.full_name||'Player'
   const payoutIsFinal=match.status==='settled'
   const payoutValue=payoutIsFinal?(match.winner_net_payout??match.winner_amount):match.estimated_winner_payout
   const payoutLabel=payoutIsFinal?'Winner net payout':'Estimated winner payout'
@@ -242,8 +249,23 @@ export function MatchPage({notify}) {
           <div><small>{commissionLabel}</small><strong>{formatINR(Number(match.platform_commission ?? match.platform_fee))}</strong></div>
           <div><small>{payoutLabel}</small><strong className="positive-text">{payoutValue===null||payoutValue===undefined?'Calculated after settlement':formatINR(Number(payoutValue))}</strong>{!payoutIsFinal&&payoutValue!==null&&payoutValue!==undefined&&<small>Excludes any eligible referral reward.</small>}</div>
         </div>
-        <div className="room-code"><div><small>ROOM CODE</small><strong>{hasRoomCode?match.room_code:'Room code not available yet.'}</strong></div>{hasRoomCode&&<CopyButton value={match.room_code} onCopied={()=>notify('Room code copied')}/>}</div>
-        {canSubmitRoom&&<form className="form-stack room-code-form" onSubmit={handleRoomCodeSubmit}><FormField label={hasRoomCode?'Update room code':'Room code'}><input name="roomCode" maxLength="64" defaultValue={match.room_code||''} required placeholder="Enter the game room code"/></FormField>{roomError&&<p className="auth-error" role="alert">{roomError}</p>}<Button type="submit" disabled={submitting}>{submitting?'Submitting…':hasRoomCode?'Update room code':'Share room code'}</Button></form>}
+        <div className="room-code"><div><small>ROOM CODE</small><strong>{hasRoomCode?match.room_code:'Room code not available yet.'}</strong></div>{hasRoomCode&&<CopyButton value={match.room_code} onCopied={()=>notify('Room code copied')} onCopyError={()=>notify('Copy was unavailable. Select and copy the room code manually.')}/>}</div>
+        {isLudoKingMatch&&canManageRoom&&<div className="notice room-guide">
+          <p><strong>{hasRoomCode?'Open Ludo King to use this room.':'Create a private room in Ludo King.'}</strong> PlayNexa does not create the Ludo King room automatically. Open the official link, create the private room, then return here and save its code.</p>
+          <div className="button-row">
+            <a className="btn btn-secondary" href={getLudoKingLaunchUrl()} target="_blank" rel="noopener noreferrer">{hasRoomCode?'Open Ludo King':'Create Room in Ludo King'}</a>
+            <a className="text-link" href={LUDO_KING_LINKS.website} target="_blank" rel="noopener noreferrer">Official website</a>
+          </div>
+          <div className="room-store-links"><a className="text-link" href={LUDO_KING_LINKS.android} target="_blank" rel="noopener noreferrer">Android app</a><a className="text-link" href={LUDO_KING_LINKS.ios} target="_blank" rel="noopener noreferrer">iPhone/iPad app</a></div>
+        </div>}
+        {isLudoKingMatch&&isOpponent&&!hasRoomCode&&<div className="notice room-guide"><p><strong>Waiting for the host to share the room code.</strong> The join action will appear here after the code is saved.</p></div>}
+        {isLudoKingMatch&&isOpponent&&hasRoomCode&&<div className="notice room-guide">
+          <p><strong>Join this private room manually.</strong> Open Ludo King, choose its private-room join flow, and enter the copied code above. PlayNexa has no verified invitation link for a specific room, so this button opens Ludo King but does not join the room automatically.</p>
+          <div className="button-row"><a className="btn btn-primary" href={getLudoKingLaunchUrl()} target="_blank" rel="noopener noreferrer">Join Room in Ludo King</a><a className="text-link" href={LUDO_KING_LINKS.website} target="_blank" rel="noopener noreferrer">Official website</a></div>
+          <div className="room-store-links"><a className="text-link" href={LUDO_KING_LINKS.android} target="_blank" rel="noopener noreferrer">Android app</a><a className="text-link" href={LUDO_KING_LINKS.ios} target="_blank" rel="noopener noreferrer">iPhone/iPad app</a></div>
+        </div>}
+        {canSubmitRoom&&<form className="form-stack room-code-form" onSubmit={handleRoomCodeSubmit}><FormField label={replacingRoomCode?'Replace room code':'Room code'}><input name="roomCode" maxLength="64" defaultValue={match.room_code||''} required placeholder="Enter the game room code"/></FormField>{replacingRoomCode&&<p className="form-disclaimer">Replacing the saved code is an explicit host action. The previous code will no longer be shown as current.</p>}{roomError&&<p className="auth-error" role="alert">{roomError}</p>}<div className="button-row"><Button type="submit" disabled={submitting}>{submitting?'Saving…':replacingRoomCode?'Replace Room Code':'Save Room Code'}</Button>{replacingRoomCode&&<Button type="button" variant="secondary" onClick={()=>{setReplacingRoomCode(false);setRoomError('')}}>Keep Current Code</Button>}</div></form>}
+        {canManageRoom&&hasRoomCode&&!replacingRoomCode&&<div className="button-row room-code-management"><Button type="button" variant="secondary" onClick={()=>{setRoomError('');setReplacingRoomCode(true)}}>Replace Room Code</Button></div>}
         <div className="match-status-line"><Status>{match.status.replaceAll('_',' ')}</Status><span>Game code: {match.game.slug}</span></div>
         {['completed','disputed','settled','rejected'].includes(match.status)&&<div className="notice"><p>{getResultMessage(match.status,result?.winnerClaimStatus)}</p></div>}
         {canClaimResult&&<Button onClick={()=>{setResultError('');setResultAction('claim')}}>Submit Result</Button>}

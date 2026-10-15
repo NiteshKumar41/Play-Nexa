@@ -21,3 +21,4 @@
 @media(max-width:760px){.sidebar-wrap{visibility:hidden}.sidebar-wrap.open{visibility:visible}}
 .footer,.nav-label,.profile-chip small,.support-mini small,.stat-note,.game-tile-info p,.lobby-hero-copy p,.financial-grid small,.room-code small,.match-player small,.form-field small,.muted,.ticket-detail>small,.auth-footer,.auth-safe{color:#94a3b8}
 .form-field input::placeholder,.form-field textarea::placeholder,.search-field input::placeholder{color:#94a3b8;opacity:1}
+.room-guide{display:grid;margin-top:12px}.room-guide p strong{color:#e8eef6}.room-guide .button-row{margin-top:4px}.room-store-links{display:flex;gap:10px;flex-wrap:wrap}.room-code-management{margin-top:12px}.room-code-form{margin-top:12px}

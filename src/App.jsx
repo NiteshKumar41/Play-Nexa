@@ -22,7 +22,12 @@ import {
   SupportPage,
   WalletPage,
 } from './pages/player/PlayerPages';
-import { RequireAdmin, RequireAuth } from './routes/ProtectedRoutes';
+import {
+  RequireAdmin,
+  RequireAuth,
+  RequirePlayer,
+  RoleHomeRedirect,
+} from './routes/ProtectedRoutes';
 import { ROUTES } from './constants/routes';
 import './App.css';
 
@@ -75,7 +80,7 @@ function AppContent() {
   return (
     <>
       <Routes>
-        <Route path="/" element={<Navigate to={ROUTES.dashboard} replace />} />
+        <Route path="/" element={<RoleHomeRedirect />} />
         <Route path={ROUTES.login} element={<AuthPage mode="login" onSuccess={notify} />} />
         <Route path={ROUTES.signup} element={<AuthPage mode="signup" onSuccess={notify} />} />
         <Route
@@ -84,63 +89,65 @@ function AppContent() {
         />
 
         <Route element={<RequireAuth />}>
-          <Route
-            path={ROUTES.dashboard}
-            element={(
-              <PlayerPage title="Dashboard" profile={profile} onLogout={handleLogout}>
-                <Dashboard />
-              </PlayerPage>
-            )}
-          />
-          <Route
-            path={ROUTES.games}
-            element={(
-              <PlayerPage title="Games" profile={profile} onLogout={handleLogout}>
-                <GamesPage />
-              </PlayerPage>
-            )}
-          />
-          <Route
-            path={ROUTES.profile}
-            element={(
-              <PlayerPage title="Profile" profile={profile} onLogout={handleLogout}>
-                <ProfilePage />
-              </PlayerPage>
-            )}
-          />
-          <Route
-            path={`${ROUTES.games}/:gameId`}
-            element={(
-              <PlayerPage title="Game lobby" profile={profile} onLogout={handleLogout}>
-                <Lobby key={location.pathname} notify={notify} />
-              </PlayerPage>
-            )}
-          />
-          <Route path={`${ROUTES.matches}/`} element={<Navigate to={ROUTES.defaultMatch} replace />} />
-          <Route
-            path={`${ROUTES.matches}/:id`}
-            element={(
-              <PlayerPage title="Match details" profile={profile} onLogout={handleLogout}>
-                <MatchPage notify={notify} />
-              </PlayerPage>
-            )}
-          />
-          <Route
-            path={ROUTES.wallet}
-            element={(
-              <PlayerPage title="Wallet" profile={profile} onLogout={handleLogout}>
-                <WalletPage notify={notify} />
-              </PlayerPage>
-            )}
-          />
-          <Route
-            path={ROUTES.support}
-            element={(
-              <PlayerPage title="Support" profile={profile} onLogout={handleLogout}>
-                <SupportPage notify={notify} />
-              </PlayerPage>
-            )}
-          />
+          <Route element={<RequirePlayer />}>
+            <Route
+              path={ROUTES.dashboard}
+              element={(
+                <PlayerPage title="Dashboard" profile={profile} onLogout={handleLogout}>
+                  <Dashboard />
+                </PlayerPage>
+              )}
+            />
+            <Route
+              path={ROUTES.games}
+              element={(
+                <PlayerPage title="Games" profile={profile} onLogout={handleLogout}>
+                  <GamesPage />
+                </PlayerPage>
+              )}
+            />
+            <Route
+              path={ROUTES.profile}
+              element={(
+                <PlayerPage title="Profile" profile={profile} onLogout={handleLogout}>
+                  <ProfilePage />
+                </PlayerPage>
+              )}
+            />
+            <Route
+              path={`${ROUTES.games}/:gameId`}
+              element={(
+                <PlayerPage title="Game lobby" profile={profile} onLogout={handleLogout}>
+                  <Lobby key={location.pathname} notify={notify} />
+                </PlayerPage>
+              )}
+            />
+            <Route path={`${ROUTES.matches}/`} element={<Navigate to={ROUTES.defaultMatch} replace />} />
+            <Route
+              path={`${ROUTES.matches}/:id`}
+              element={(
+                <PlayerPage title="Match details" profile={profile} onLogout={handleLogout}>
+                  <MatchPage notify={notify} />
+                </PlayerPage>
+              )}
+            />
+            <Route
+              path={ROUTES.wallet}
+              element={(
+                <PlayerPage title="Wallet" profile={profile} onLogout={handleLogout}>
+                  <WalletPage notify={notify} />
+                </PlayerPage>
+              )}
+            />
+            <Route
+              path={ROUTES.support}
+              element={(
+                <PlayerPage title="Support" profile={profile} onLogout={handleLogout}>
+                  <SupportPage notify={notify} />
+                </PlayerPage>
+              )}
+            />
+          </Route>
 
           <Route element={<RequireAdmin />}>
             <Route
@@ -170,7 +177,7 @@ function AppContent() {
           </Route>
         </Route>
 
-        <Route path="*" element={<Navigate to={ROUTES.dashboard} replace />} />
+        <Route path="*" element={<RoleHomeRedirect />} />
       </Routes>
       <Toast message={toastMessage} onClose={() => setToastMessage('')} />
     </>

@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
 import { Button, FormField } from '../../components/common';
 import { useAuth } from '../../hooks/useAuth';
+import { postAuthPath } from '../../routes/roleRouting';
 
 export function AuthPage({ mode, onSuccess }) {
   const navigate = useNavigate();
@@ -69,19 +70,16 @@ export function AuthPage({ mode, onSuccess }) {
 
         onSuccess?.('Your account is ready.');
       } else {
-        await login({
+        const authenticatedUser = await login({
           phone: formValues.get('phone'),
           passcode: formValues.get('passcode'),
         });
         onSuccess?.('Signed in successfully.');
+        navigate(postAuthPath(authenticatedUser.user?.role, location.state?.from), { replace: true });
+        return;
       }
 
-      const previousLocation = location.state?.from;
-      const destination = previousLocation
-        ? `${previousLocation.pathname || '/dashboard'}${previousLocation.search || ''}${previousLocation.hash || ''}`
-        : '/dashboard';
-
-      navigate(destination, { replace: true });
+      navigate(postAuthPath('player', location.state?.from), { replace: true });
     } catch (error) {
       setFormError(
         error instanceof Error

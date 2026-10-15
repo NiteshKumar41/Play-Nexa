@@ -123,10 +123,10 @@ export async function getMatch(matchId) {
   return toPageMatch(result.match, result.match.game)
 }
 
-export async function updateRoomCode(matchId, roomCode) {
+export async function updateRoomCode(matchId, roomCode, { replaceExisting = false } = {}) {
   await requestMatchApi(`/${encodeURIComponent(matchId)}/room-code`, {
     method: 'PATCH',
-    body: { roomCode },
+    body: { roomCode, ...(replaceExisting ? { replaceExisting: true } : {}) },
   })
 }
 

@@ -3,6 +3,7 @@ export const ROUTES = {
   signup: '/signup',
   forgotPassword: '/forgot-password',
   dashboard: '/dashboard',
+  profile: '/profile',
   games: '/games',
   matches: '/match',
   defaultMatch: '/match/NX-2841',

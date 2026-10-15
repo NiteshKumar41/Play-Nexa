@@ -8,17 +8,18 @@ import {
   LayoutDashboard,
   Menu,
   Swords,
+  UserCircle,
   Users,
   Wallet,
   X,
   Zap,
 } from 'lucide-react'
-import { adminNav, player } from '../../data/mockData'
+import { adminNav } from '../../data/mockData'
 
 const playerNavigation = [
   ['Dashboard', '/dashboard', LayoutDashboard],
+  ['Profile', '/profile', UserCircle],
   ['Games', '/games', Gamepad2],
-  ['My matches', '/match/NX-2841', Swords],
   ['Wallet', '/wallet', Wallet],
   ['Support', '/support', CircleHelp],
 ]
@@ -36,7 +37,7 @@ function Brand({ isAdmin = false }) {
 }
 
 function PlayerSidebar({ closeMenu, profile }) {
-  const playerName = profile?.full_name || player.name
+  const playerName = profile?.full_name || 'Player'
   const initials = playerName
     .split(/\s+/)
     .map(part => part[0])
@@ -58,7 +59,6 @@ function PlayerSidebar({ closeMenu, profile }) {
           >
             <Icon size={17} />
             <span>{label}</span>
-            {label === 'My matches' && <i>2</i>}
           </NavLink>
         ))}
       </nav>
@@ -74,7 +74,7 @@ function PlayerSidebar({ closeMenu, profile }) {
           <span className="profile-avatar">{initials}</span>
           <span>
             <strong>{playerName}</strong>
-            <small>{profile?.phone || player.phone}</small>
+            <small>{profile?.phone || 'Phone unavailable'}</small>
           </span>
           <ChevronDown size={15} />
         </div>
@@ -135,7 +135,7 @@ function AdminSidebar({ closeMenu }) {
 
 function Topbar({ title, onMenu, isMenuOpen, isAdmin, profile, onLogout }) {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
-  const accountName = profile?.full_name || (isAdmin ? 'Admin' : player.name)
+  const accountName = profile?.full_name || (isAdmin ? 'Admin' : 'Player')
   const initials = accountName
     .split(/\s+/)
     .map(part => part[0])
@@ -191,8 +191,7 @@ function Topbar({ title, onMenu, isMenuOpen, isAdmin, profile, onLogout }) {
               aria-label="Recent notifications"
             >
               <strong>Notifications</strong>
-              <p><span /> Deposit confirmed · ₹500 added to your wallet</p>
-              <p><span /> Match NX-2841 is ready for review</p>
+              <p><span /> You’re all caught up.</p>
               <button onClick={() => setIsNotificationsOpen(false)}>Close</button>
             </div>
           )}
@@ -279,7 +278,7 @@ export function PlayerLayout({ children, title, profile, onLogout }) {
           </footer>
         </main>
         <nav aria-label="Player navigation" className="bottom-nav">
-          {playerNavigation.filter((_, index) => index !== 2).map(([label, path, Icon]) => (
+          {playerNavigation.filter(([label]) => label !== 'My matches').map(([label, path, Icon]) => (
             <NavLink
               key={label}
               to={path}

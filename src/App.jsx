@@ -18,6 +18,7 @@ import {
   GamesPage,
   Lobby,
   MatchPage,
+  ProfilePage,
   SupportPage,
   WalletPage,
 } from './pages/player/PlayerPages';
@@ -96,6 +97,14 @@ function AppContent() {
             element={(
               <PlayerPage title="Games" profile={profile} onLogout={handleLogout}>
                 <GamesPage />
+              </PlayerPage>
+            )}
+          />
+          <Route
+            path={ROUTES.profile}
+            element={(
+              <PlayerPage title="Profile" profile={profile} onLogout={handleLogout}>
+                <ProfilePage />
               </PlayerPage>
             )}
           />

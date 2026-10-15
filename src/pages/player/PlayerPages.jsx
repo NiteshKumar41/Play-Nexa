@@ -1,4 +1,5 @@
 export { Dashboard } from './Dashboard';
+export { ProfilePage } from './ProfilePage';
 export { GamesPage, Lobby } from './GamesPage';
 export { MatchPage } from './MatchPage';
 export { WalletPage } from './WalletPage';

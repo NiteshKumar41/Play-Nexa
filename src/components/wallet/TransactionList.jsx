@@ -3,7 +3,7 @@ import { Status } from '../../components/common';
 import { formatINR } from '../../data/mockData';
 import { formatIndiaDateTime } from '../../utils/formatDate';
 
-const CREDIT_TYPES = new Set(['ADD_MONEY', 'GAME_WIN', 'GAME_REFUND']);
+const CREDIT_TYPES = new Set(['ADD_MONEY', 'GAME_WIN', 'GAME_REFUND', 'REFERRAL_REWARD']);
 const TRANSACTION_LABELS = {
   ADD_MONEY: 'Wallet top-up',
   WITHDRAW: 'Withdrawal',
@@ -11,6 +11,7 @@ const TRANSACTION_LABELS = {
   GAME_JOIN: 'Match entry',
   GAME_WIN: 'Match winnings',
   GAME_REFUND: 'Match refund',
+  REFERRAL_REWARD: 'Referral reward',
 };
 
 function displayTransaction(transaction) {

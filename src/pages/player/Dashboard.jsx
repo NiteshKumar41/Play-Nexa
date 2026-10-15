@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Gamepad2, ShieldCheck, Swords, Trophy, Wallet as WalletIcon } from 'lucide-react';
+import { Check, Copy, Gamepad2, ShieldCheck, Swords, Trophy, Wallet as WalletIcon } from 'lucide-react';
 import { DataState, PageTitle, Panel } from '../../components/common';
 import { matches } from '../../data/mockData';
 import { GameTile } from '../../components/games/GameCard'
@@ -23,7 +23,7 @@ function Stat({ icon: Icon, label, value, note, accent = '' }) {
 }
 
 export function Dashboard() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [wallet, setWallet] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [walletLoading, setWalletLoading] = useState(true);
@@ -33,6 +33,8 @@ export function Dashboard() {
   const [games, setGames] = useState([]);
   const [gamesLoading, setGamesLoading] = useState(true);
   const [gamesError, setGamesError] = useState('');
+  const [referralCopied, setReferralCopied] = useState(false);
+  const [referralCopyError, setReferralCopyError] = useState('');
 
   const loadWalletSummary = useCallback(async () => {
     setWalletLoading(true);
@@ -87,6 +89,19 @@ export function Dashboard() {
 
   const activeMatches = matches.filter(match => match.status !== 'Completed');
   const popularGames = games.slice(0, 3);
+  const referralCode = profile?.referral_code || user?.referralCode || '';
+
+  async function copyReferralCode() {
+    if (!referralCode) return;
+    setReferralCopyError('');
+    try {
+      await navigator.clipboard.writeText(referralCode);
+      setReferralCopied(true);
+      window.setTimeout(() => setReferralCopied(false), 1800);
+    } catch {
+      setReferralCopyError('Copy was unavailable. Select the code manually.');
+    }
+  }
 
   return (
     <>
@@ -107,6 +122,20 @@ export function Dashboard() {
         <Stat icon={Swords} accent="icon-amber" label="Matches played" value="48" note="32 wins · 67% win rate" />
         <Stat icon={ShieldCheck} accent="icon-blue" label="Skill rating" value="1,240" note="Gold league" />
       </div>
+
+      <Panel title="Your referral code" subtitle="Invite friends and earn when an eligible referral wins.">
+        <div className="compact-row">
+          <div className="row-grow">
+            <strong>{referralCode || 'Loading your code…'}</strong>
+            <small>Rewards are calculated and credited by PlayNexa after settlement.</small>
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={copyReferralCode} disabled={!referralCode}>
+            {referralCopied ? <Check size={16} /> : <Copy size={16} />}
+            {referralCopied ? 'Copied' : 'Copy code'}
+          </button>
+        </div>
+        {referralCopyError && <p className="form-disclaimer" role="alert">{referralCopyError}</p>}
+      </Panel>
 
       <div className="content-grid">
         <Panel

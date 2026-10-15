@@ -17,7 +17,7 @@ function createAuthResult(data) {
   }
 }
 
-function createSignupPayload({ fullName, phone, passcode, email, dob, gender, upiId }) {
+function createSignupPayload({ fullName, phone, passcode, email, dob, gender, upiId, referralCode }) {
   const payload = {
     fullName: String(fullName || '').trim(),
     phone: String(phone || '').trim(),
@@ -28,6 +28,7 @@ function createSignupPayload({ fullName, phone, passcode, email, dob, gender, up
   if (dob) payload.dob = String(dob).trim()
   if (gender) payload.gender = String(gender).trim()
   if (upiId) payload.upiId = String(upiId).trim()
+  if (referralCode) payload.referralCode = String(referralCode).trim()
 
   return payload
 }

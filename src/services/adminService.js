@@ -1,20 +1,14 @@
 import { mockStore, now } from './mockStore'
-import { getPendingDisputeCount } from './adminSettlementService'
 import { apiClient } from './apiClient'
+import { getPendingDisputeCount } from './adminSettlementService'
+import { mapAdminDashboardSummary } from './adminDashboardSummary'
 
 export async function getAdminDashboardSummary() {
-  const pendingDisputes = await getPendingDisputeCount()
-  return {
-    deposits_total: 18500,
-    withdrawals_total: 8500,
-    completed_matches: 148,
-    platform_earnings: 6240,
-    pending_deposits: mockStore.deposits.filter(item => item.status === 'PENDING').reduce((sum, item) => sum + Number(item.amount), 0),
-    pending_withdrawals: mockStore.payouts.filter(item => item.status === 'INITIATED').reduce((sum, item) => sum + Number(item.amount), 0),
-    pending_disputes: pendingDisputes,
-    players: mockStore.users.length,
-    pending_tickets: mockStore.supportTickets.filter(item => item.status === 'OPEN' || item.status === 'IN_PROGRESS').length,
-  }
+  const [dashboardResponse, pendingDisputes] = await Promise.all([
+    apiClient.get('/admin/dashboard/summary'),
+    getPendingDisputeCount(),
+  ])
+  return mapAdminDashboardSummary(dashboardResponse.data, pendingDisputes)
 }
 
 export async function getAdminDeposits() {

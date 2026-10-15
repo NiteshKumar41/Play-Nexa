@@ -21,6 +21,7 @@ function createProfile(user) {
     dob: user.dob || '',
     gender: user.gender || '',
     upi_id: user.upiId || '',
+    referral_code: user.referralCode || '',
     user_type: user.role,
     active: true,
     is_blocked: false,

@@ -25,6 +25,12 @@
  * @property {number} player1Amount
  * @property {number | null} player2Amount
  * @property {number} prizePool
+ * @property {number} grossWinningAmount
+ * @property {number} commissionRate
+ * @property {number} platformCommission
+ * @property {number} referralReward
+ * @property {number} winnerNetPayout
+ * @property {number | null} estimatedWinnerPayout
  * @property {number} platformFee
  * @property {number} winnerAmount
  * @property {number | null} refundAmountPerPlayer
@@ -33,13 +39,13 @@
  * @property {string} id
  * @property {string} walletId
  * @property {string} userId
- * @property {'GAME_WIN' | 'GAME_REFUND'} transactionType
+ * @property {'GAME_WIN' | 'GAME_REFUND' | 'REFERRAL_REWARD'} transactionType
  * @property {number} amount
  * @property {number} balanceBefore
  * @property {number} balanceAfter
  * @property {'SUCCESS'} status
  * @property {string | null} referenceId
- * @property {'MATCH_SETTLEMENT' | 'MATCH_REFUND' | null} referenceType
+ * @property {'MATCH_SETTLEMENT' | 'MATCH_REFUND' | 'REFERRAL_REWARD' | null} referenceType
  * @property {string} createdAt
  *
  * @typedef {Object} SettlementDetail

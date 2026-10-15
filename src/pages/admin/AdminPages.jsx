@@ -27,15 +27,16 @@ function AdminSummary() {
   const load=useCallback(async()=>{setLoading(true);setError('');try{setSummary(await getAdminDashboardSummary())}catch(loadError){setError(loadError instanceof Error?loadError.message:'Unable to load admin summary.')}finally{setLoading(false)}},[])
   useEffect(()=>{queueMicrotask(load)},[load])
   const metrics=summary?[
-    ['Total deposits',formatINR(Number(summary.deposits_total)),Wallet,'icon-indigo'],
-    ['Total withdrawals',formatINR(Number(summary.withdrawals_total)),Wallet,'icon-blue'],
-    ['Matches played',Number(summary.completed_matches).toLocaleString('en-IN'),Swords,'icon-green'],
-    ['Platform earnings',formatINR(Number(summary.platform_earnings)),ShieldCheck,'icon-amber'],
-    ['Pending deposits',formatINR(Number(summary.pending_deposits)),Wallet,'icon-amber'],
-    ['Pending withdrawals',formatINR(Number(summary.pending_withdrawals)),Wallet,'icon-blue'],
-    ['Pending disputes',Number(summary.pending_disputes).toLocaleString('en-IN'),CircleHelp,'icon-red'],
+    ['Total deposits',formatINR(Number(summary.deposits_total)),Wallet,'icon-indigo','Live backend data'],
+    ['Total withdrawals',formatINR(Number(summary.withdrawals_total)),Wallet,'icon-blue','Live backend data'],
+    ['Matches played',Number(summary.completed_matches).toLocaleString('en-IN'),Swords,'icon-green','Live backend data'],
+    ['Recorded commission',formatINR(Number(summary.platform_commission_total)),ShieldCheck,'icon-amber',`${Number(summary.platform_commission_count).toLocaleString('en-IN')} accounting records`],
+    ['Legacy platform fees',formatINR(Number(summary.legacy_platform_fee_total)),ShieldCheck,'icon-amber',`${Number(summary.legacy_settled_match_count).toLocaleString('en-IN')} historical matches; excluded from new commission`],
+    ['Pending deposits',formatINR(Number(summary.pending_deposits)),Wallet,'icon-amber','Live backend data'],
+    ['Pending withdrawals',formatINR(Number(summary.pending_withdrawals)),Wallet,'icon-blue','Live backend data'],
+    ['Pending disputes',Number(summary.pending_disputes).toLocaleString('en-IN'),CircleHelp,'icon-red','Live backend data'],
   ]:[]
-  return <><PageTitle eyebrow="ADMINISTRATION" title="Platform summary" subtitle="Monitor operations, payments, and player activity."/><DataState loading={loading} error={error} retry={load} empty={false}>{summary&&<><div className="admin-kpi-grid">{metrics.map(([label,value,Icon,accent])=><article className="stat-card" key={label}><span className={`stat-icon ${accent}`}><Icon size={18}/></span><small>{label}</small><strong>{value}</strong><span className="stat-note">Mock preview data</span></article>)}</div><div className="content-grid"><Panel title="Operations at a glance" subtitle="Platform totals"><div className="overview-bars">{[['Players',summary.players],['Completed matches',summary.completed_matches],['Pending support tickets',summary.pending_tickets],['Pending disputes',summary.pending_disputes]].map(([label,value])=><div className="overview-bar" key={label}><span>{label}<strong>{Number(value).toLocaleString('en-IN')}</strong></span><i><b style={{width:`${Math.min(100,Number(value))}%`}}/></i></div>)}</div></Panel><Panel title="Needs attention" subtitle="Items waiting for admin review"><div className="attention-list">{[['Deposits awaiting approval',formatINR(Number(summary.pending_deposits)),'/admin/deposits'],['Payouts to process',formatINR(Number(summary.pending_withdrawals)),'/admin/payouts'],['Match disputes',`${summary.pending_disputes} matches`,'/admin/settlements'],['Support tickets',`${summary.pending_tickets} tickets`,'/admin/support']].map(([label,detail,path])=><Link to={path} className="attention-item" key={path}><span><strong>{label}</strong><small>{detail}</small></span><b>→</b></Link>)}</div></Panel></div></>}</DataState></>
+  return <><PageTitle eyebrow="ADMINISTRATION" title="Platform summary" subtitle="Monitor operations, payments, and player activity."/><DataState loading={loading} error={error} retry={load} empty={false}>{summary&&<><div className="admin-kpi-grid">{metrics.map(([label,value,Icon,accent,note])=><article className="stat-card" key={label}><span className={`stat-icon ${accent}`}><Icon size={18}/></span><small>{label}</small><strong>{value}</strong><span className="stat-note">{note}</span></article>)}</div><div className="content-grid"><Panel title="Operations at a glance" subtitle="Platform totals"><div className="overview-bars">{[['Players',summary.players],['Completed matches',summary.completed_matches],['Pending support tickets',summary.pending_tickets],['Pending disputes',summary.pending_disputes]].map(([label,value])=><div className="overview-bar" key={label}><span>{label}<strong>{Number(value).toLocaleString('en-IN')}</strong></span><i><b style={{width:`${Math.min(100,Number(value))}%`}}/></i></div>)}</div></Panel><Panel title="Needs attention" subtitle="Items waiting for admin review"><div className="attention-list">{[['Deposits awaiting approval',formatINR(Number(summary.pending_deposits)),'/admin/deposits'],['Payouts to process',formatINR(Number(summary.pending_withdrawals)),'/admin/payouts'],['Match disputes',`${summary.pending_disputes} matches`,'/admin/settlements'],['Support tickets',`${summary.pending_tickets} tickets`,'/admin/support']].map(([label,detail,path])=><Link to={path} className="attention-item" key={path}><span><strong>{label}</strong><small>{detail}</small></span><b>→</b></Link>)}</div></Panel></div></>}</DataState></>
 }
 
 function AdminTabs({items,value,onChange}) { return <div className="filter-tabs">{items.map(item=><button key={item} type="button" aria-pressed={value===item} className={value===item?'selected':''} onClick={()=>onChange(item)}>{item}</button>)}</div> }
@@ -155,7 +156,7 @@ function Settlements({notify}) {
         response=await rejectWinnerClaim(decision.row.id,reason)
       }
       const payoutMessage=decision.action==='Declare Winner'&&response.data?.winnerAmount!==undefined
-        ?` Winner payout ${formatINR(Number(response.data.winnerAmount))}; platform fee ${formatINR(Number(response.data.platformFee))}.`
+        ?` Winner payout ${formatINR(Number(response.data.winnerNetPayout ?? response.data.winnerAmount))}; platform commission ${formatINR(Number(response.data.platformCommission ?? response.data.platformFee))}.`
         :''
       notify(`${response.message||`${decision.action} completed for match ${decision.row.id.slice(0,8)}.`}${payoutMessage}`)
       setDecision(null)
@@ -201,7 +202,7 @@ function Settlements({notify}) {
     </Panel>
     {decision&&<Modal title={`${decision.action}?`} onClose={()=>!busy&&setDecision(null)}>
       <form className="form-stack" onSubmit={completeDecision}>
-        {decision.action==='Declare Winner'&&<p>Choose the match winner. The backend will calculate the final fee and wallet payout.</p>}
+        {decision.action==='Declare Winner'&&<p>Choose the match winner. The backend will calculate the gross payout, commission, referral reward, and final wallet payout.</p>}
         {decision.action==='Refund Both'&&<p>Refund each player’s original entry amount and cancel this match.</p>}
         {decision.action==='Reject Claim'&&<p>Rejecting this claim will refund both players’ original entry amounts and cancel this match.</p>}
         {decision.action==='Declare Winner'&&<FormField label="Select winner"><select name="winnerUserId" required defaultValue={decision.row.winnerClaimedBy}>{eligibleWinners(decision.row).map(player=><option key={player.id} value={player.id}>{playerLabel(player,player.id===decision.row.player1.id?'Player 1':'Player 2')}</option>)}</select></FormField>}
@@ -218,6 +219,17 @@ function Settlements({notify}) {
           const player2=match.player2
           const claimant=player1?.id===match.winnerClaimedBy?player1:player2
           const disputer=player1?.id===match.disputeClaimedBy?player1:player2
+          const payoutIsFinal=match.status==='SETTLED'
+          const payoutValue=payoutIsFinal
+            ?match.financials.winnerNetPayout ?? match.financials.winnerAmount
+            :match.financials.estimatedWinnerPayout
+          const commissionIsRecorded=Boolean(settlementDetail.platformCommission)
+          const commissionLabel=commissionIsRecorded
+            ?'Platform commission'
+            :payoutIsFinal?'Historical platform fee':'Estimated platform commission'
+          const commissionValue=commissionIsRecorded
+            ?settlementDetail.platformCommission.commissionAmount
+            :payoutIsFinal?match.financials.platformFee:match.financials.platformCommission
           return <div className="form-stack">
             <div className="match-status-line"><Status>{match.status}</Status><span>{match.game?.name||'Match'}</span></div>
             <p><strong>Match ID:</strong> {match.id}</p>
@@ -225,8 +237,9 @@ function Settlements({notify}) {
             <p><strong>Player 2:</strong> {player2?.name||'—'} · {player2?.phone||'—'} · {player2?formatINR(Number(player2.amount)): 'Not joined'}</p>
             <div className="financial-grid">
               <div><small>Prize pool</small><strong>{formatINR(Number(match.financials.prizePool||0))}</strong></div>
-              <div><small>Platform fee</small><strong>{formatINR(Number(match.financials.platformFee||0))}</strong></div>
-              <div><small>Winner amount</small><strong>{formatINR(Number(match.financials.winnerAmount||0))}</strong></div>
+              <div><small>{commissionLabel}</small><strong>{formatINR(Number(commissionValue||0))}</strong></div>
+              <div><small>Referral reward</small><strong>{formatINR(Number(match.financials.referralReward||0))}</strong></div>
+              <div><small>{payoutIsFinal?'Winner net payout':'Estimated winner payout'}</small><strong>{payoutValue===null||payoutValue===undefined?'Calculated after settlement':formatINR(Number(payoutValue))}</strong>{!payoutIsFinal&&payoutValue!==null&&payoutValue!==undefined&&<small>Excludes any eligible referral reward.</small>}</div>
               {match.financials.refundAmountPerPlayer!==null&&<div><small>Refund per player</small><strong>{formatINR(Number(match.financials.refundAmountPerPlayer))}</strong></div>}
             </div>
             <p><strong>Room code:</strong> {match.roomCode||'Not set'}</p>

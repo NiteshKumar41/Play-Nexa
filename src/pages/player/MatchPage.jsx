@@ -213,6 +213,12 @@ export function MatchPage({notify}) {
     ?(result.winnerPlayer===result.player1?result.player1Name:result.winnerPlayer===result.player2?result.player2Name:null)
     :null
   const name=profile?.full_name||player.name
+  const payoutIsFinal=match.status==='settled'
+  const payoutValue=payoutIsFinal?(match.winner_net_payout??match.winner_amount):match.estimated_winner_payout
+  const payoutLabel=payoutIsFinal?'Winner net payout':'Estimated winner payout'
+  const commissionLabel=match.platform_commission_id
+    ?'Platform commission'
+    :payoutIsFinal?'Historical platform fee':'Estimated platform commission'
   return (
     <>
       <PageTitle eyebrow={`MATCH ${match.id.slice(0,8)}`} title={`${match.game.name} match`} subtitle="Match details and current status."/>
@@ -233,8 +239,8 @@ export function MatchPage({notify}) {
         <div className="financial-grid">
           <div><small>Entry amount</small><strong>{formatINR(Number(match.entry_amount))} each</strong></div>
           <div><small>Prize pool</small><strong>{formatINR(Number(match.prize_pool))}</strong></div>
-          <div><small>Platform fee</small><strong>{formatINR(Number(match.platform_fee))}</strong></div>
-          <div><small>Winner amount</small><strong className="positive-text">{formatINR(Number(match.winner_amount))}</strong></div>
+          <div><small>{commissionLabel}</small><strong>{formatINR(Number(match.platform_commission ?? match.platform_fee))}</strong></div>
+          <div><small>{payoutLabel}</small><strong className="positive-text">{payoutValue===null||payoutValue===undefined?'Calculated after settlement':formatINR(Number(payoutValue))}</strong>{!payoutIsFinal&&payoutValue!==null&&payoutValue!==undefined&&<small>Excludes any eligible referral reward.</small>}</div>
         </div>
         <div className="room-code"><div><small>ROOM CODE</small><strong>{hasRoomCode?match.room_code:'Room code not available yet.'}</strong></div>{hasRoomCode&&<CopyButton value={match.room_code} onCopied={()=>notify('Room code copied')}/>}</div>
         {canSubmitRoom&&<form className="form-stack room-code-form" onSubmit={handleRoomCodeSubmit}><FormField label={hasRoomCode?'Update room code':'Room code'}><input name="roomCode" maxLength="64" defaultValue={match.room_code||''} required placeholder="Enter the game room code"/></FormField>{roomError&&<p className="auth-error" role="alert">{roomError}</p>}<Button type="submit" disabled={submitting}>{submitting?'Submitting…':hasRoomCode?'Update room code':'Share room code'}</Button></form>}

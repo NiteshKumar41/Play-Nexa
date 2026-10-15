@@ -58,6 +58,7 @@ export function AuthPage({ mode, onSuccess }) {
           fullName: formValues.get('fullName'),
           email: formValues.get('email'),
           upiId: formValues.get('upi'),
+          referralCode: formValues.get('referralCode'),
         });
 
         if (!result.session) {
@@ -145,6 +146,12 @@ export function AuthPage({ mode, onSuccess }) {
             {isSignup && (
               <FormField label="UPI ID (optional)">
                 <input name="upi" placeholder="name@bank" />
+              </FormField>
+            )}
+
+            {isSignup && (
+              <FormField label="Referral code (optional)" hint="Enter a friend's code if you have one.">
+                <input name="referralCode" autoComplete="off" placeholder="e.g. ABCD2345" maxLength="32" pattern="[A-Za-z0-9]{8,32}" />
               </FormField>
             )}
 

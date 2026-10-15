@@ -13,6 +13,13 @@
  * @property {number} player1Amount
  * @property {MatchStatus} status
  * @property {number} prizePool
+ * @property {number} grossWinningAmount
+ * @property {number} commissionRate
+ * @property {number} platformCommission
+ * @property {number} referralReward
+ * @property {number} winnerNetPayout
+ * @property {number | null} estimatedWinnerPayout
+ * @property {string | null} platformCommissionId
  * @property {string} createdAt
  */
 
@@ -26,6 +33,13 @@
  *   player2Amount: number | null,
  *   roomCode?: string,
  *   platformFee: number,
+ *   grossWinningAmount: number,
+ *   commissionRate: number,
+ *   platformCommission: number,
+ *   referralReward: number,
+ *   winnerNetPayout: number,
+ *   estimatedWinnerPayout: number | null,
+ *   platformCommissionId: string | null,
  *   winnerAmount: number,
  *   joinedAt: string | null,
  *   cancelledAt: string | null,
@@ -44,6 +58,9 @@
  * @property {number} entry_amount
  * @property {number} prize_pool
  * @property {number} platform_fee
+ * @property {number | null} estimated_winner_payout
+ * @property {number | null} winner_net_payout
+ * @property {string | null} platform_commission_id
  * @property {number} winner_amount
  * @property {string} [room_code]
  * @property {string} status

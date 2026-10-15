@@ -216,7 +216,7 @@ export function WalletPage({notify}) {
     return()=>{cancelled=true}
   },[loadWallet])
   useEffect(()=>subscribeToWalletUpdates(()=>void loadWallet()),[loadWallet])
-  const creditTypes=['ADD_MONEY','GAME_WIN','GAME_REFUND']
+  const creditTypes=['ADD_MONEY','GAME_WIN','GAME_REFUND','REFERRAL_REWARD']
   const visible=rows.filter(row=>filter==='All'||(filter==='Credits'?creditTypes.includes(row.transactionType):!creditTypes.includes(row.transactionType)))
   return <>
     <PageTitle eyebrow="WALLET & PAYMENTS" title="Your wallet" subtitle="Manage funds securely and review every transaction."/>

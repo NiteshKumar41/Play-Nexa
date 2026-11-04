@@ -5,7 +5,7 @@ import { homePathForRole, isAdminPath, postAuthPath } from '../src/routes/roleRo
 describe('role-based authentication routing', () => {
   it('uses the correct home route for each server-provided role', () => {
     assert.equal(homePathForRole('admin'), '/admin')
-    assert.equal(homePathForRole('player'), '/dashboard')
+    assert.equal(homePathForRole('player'), '/games')
     assert.equal(homePathForRole('unknown'), '/login')
   })
 
@@ -14,7 +14,7 @@ describe('role-based authentication routing', () => {
     assert.equal(isAdminPath('/dashboard'), false)
     assert.equal(postAuthPath('admin', { pathname: '/admin/users', search: '?page=2', hash: '#users' }), '/admin/users?page=2#users')
     assert.equal(postAuthPath('admin', { pathname: '/dashboard' }), '/admin')
-    assert.equal(postAuthPath('player', { pathname: '/admin' }), '/dashboard')
+    assert.equal(postAuthPath('player', { pathname: '/admin' }), '/games')
     assert.equal(postAuthPath('player', { pathname: '/games/ludo' }), '/games/ludo')
   })
 })

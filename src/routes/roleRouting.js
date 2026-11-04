@@ -4,7 +4,7 @@ export function isAdminPath(pathname = '') {
 
 export function homePathForRole(role) {
   if (role === 'admin') return '/admin'
-  if (role === 'player') return '/dashboard'
+  if (role === 'player') return '/games'
   return '/login'
 }
 

@@ -10,7 +10,7 @@ export function GameTile({ game }) {
   const minimumEntry = Number(game.minimum_entry ?? game.entry);
 
   return (
-    <article className="game-tile">
+    <Link className="game-tile game-tile-link" to={`/games/${gameCode}`} aria-label={`Open ${game.name} game`}>
       <div className={`game-art ${visualFallback?.theme || ''}`}>
         {game.image_url
           ? <GameImage src={game.imageUrl || game.image_url} alt={`${game.name} game`} fallback={<span>{visualFallback?.symbol || '🎮'}</span>} />
@@ -27,9 +27,9 @@ export function GameTile({ game }) {
           <strong>{formatINR(minimumEntry)}</strong>
         </div>}
       </div>
-      <Link className="btn btn-secondary game-play" to={`/games/${gameCode}`}>
+      <span className="btn btn-secondary game-play">
         {game.is_open === false ? 'View game' : 'Play'} <span>→</span>
-      </Link>
-    </article>
+      </span>
+    </Link>
   );
 }

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, ShieldCheck, Wallet, Swords, CircleHelp } from 'lucide-react'
+import { Plus, Search, ShieldCheck, Wallet, Swords, CircleHelp, Trash2 } from 'lucide-react'
 import { Button, ConfirmModal, DataState, FormField, Modal, PageTitle, Panel, Status } from '../../components/common'
 import { formatINR } from '../../data/mockData'
-import { declareWinner, getPendingSettlements, getSettlement, refundBothPlayers, rejectWinnerClaim, releaseSettlementEvidence } from '../../services/adminSettlementService'
+import { declareWinner, deleteAdminScreenshot, getPendingSettlements, getSettlement, refundBothPlayers, rejectWinnerClaim, releaseSettlementEvidence } from '../../services/adminSettlementService'
 import { getAdminSupportTickets, updateSupportTicket } from '../../services/supportService'
 import { getAdminDashboardSummary, getAdminDepositProof, getAdminDeposits, getAdminPaymentMethods, getAdminUsers, getAdminWithdrawals, processManualDeposit, saveAdminPaymentMethod, updateAdminUser } from '../../services/adminService'
 import { createGame, getAdminGames, toggleGameOpenStatus, toggleGameStatus, updateGame } from '../../services/gameService'
@@ -89,6 +89,9 @@ function Settlements({notify}) {
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
   const [decisionError,setDecisionError]=useState('')
+  const [screenshotToDelete,setScreenshotToDelete]=useState(null)
+  const [deletingScreenshot,setDeletingScreenshot]=useState(false)
+  const settlementDetailRef=useRef(null)
   const detailRevision=useRef(0)
   const loadQueue=useCallback(async()=>{
     setLoading(true)
@@ -102,7 +105,7 @@ function Settlements({notify}) {
     queueMicrotask(()=>{if(!cancelled)loadQueue()})
     return()=>{cancelled=true}
   },[loadQueue])
-  useEffect(()=>()=>releaseSettlementEvidence(settlementDetail),[settlementDetail])
+  useEffect(()=>()=>releaseSettlementEvidence(settlementDetailRef.current),[])
   useEffect(()=>()=>{detailRevision.current+=1},[])
   const loadDetail=useCallback(async()=>{
     if(!selectedMatchId)return
@@ -111,7 +114,11 @@ function Settlements({notify}) {
     setDetailError('')
     try{
       const detail=await getSettlement(selectedMatchId)
-      if(revision===detailRevision.current)setSettlementDetail(detail)
+      if(revision===detailRevision.current){
+        releaseSettlementEvidence(settlementDetailRef.current)
+        settlementDetailRef.current=detail
+        setSettlementDetail(detail)
+      }
       else releaseSettlementEvidence(detail)
     }catch(detailLoadError){
       if(revision===detailRevision.current)setDetailError(detailLoadError instanceof Error?detailLoadError.message:'Unable to load settlement details.')
@@ -124,15 +131,48 @@ function Settlements({notify}) {
   },[loadDetail,selectedMatchId])
   function closeDetail(){
     detailRevision.current+=1
+    releaseSettlementEvidence(settlementDetailRef.current)
+    settlementDetailRef.current=null
     setSelectedMatchId('')
     setSettlementDetail(null)
     setDetailError('')
+    setScreenshotToDelete(null)
   }
   function openSettlement(matchId){
+    releaseSettlementEvidence(settlementDetailRef.current)
+    settlementDetailRef.current=null
     setSettlementDetail(null)
     setDetailLoading(true)
     setDetailError('')
     setSelectedMatchId(matchId)
+  }
+  function requestScreenshotDeletion(slot,label){
+    const match=settlementDetail?.match
+    const screenshotId=match?.[`${slot}ScreenshotId`]
+    if(screenshotId)setScreenshotToDelete({screenshotId,slot,label})
+  }
+  async function deleteScreenshot(){
+    if(!screenshotToDelete||deletingScreenshot)return
+    const target=screenshotToDelete
+    setDeletingScreenshot(true)
+    try{
+      const response=await deleteAdminScreenshot(target.screenshotId)
+      const screenshotUrlKey=`${target.slot}ScreenshotUrl`
+      const screenshotIdKey=`${target.slot}ScreenshotId`
+      const currentDetail=settlementDetailRef.current
+      const currentUrl=currentDetail?.match?.[screenshotUrlKey]
+      if(currentUrl)URL.revokeObjectURL(currentUrl)
+      const updatedDetail=currentDetail?{
+        ...currentDetail,
+        match:{...currentDetail.match,[screenshotUrlKey]:null,[screenshotIdKey]:null},
+      }:null
+      settlementDetailRef.current=updatedDetail
+      setSettlementDetail(updatedDetail)
+      setScreenshotToDelete(null)
+      notify(response.message||'Screenshot deleted successfully.')
+    }catch(deleteError){
+      notify(deleteError instanceof Error?`Screenshot deletion failed: ${deleteError.message}`:'Unable to delete screenshot.')
+    }finally{setDeletingScreenshot(false)}
   }
   async function completeDecision(event){
     event?.preventDefault()
@@ -255,14 +295,15 @@ function Settlements({notify}) {
             {match.settlement.settlementAction&&<p><strong>Final action:</strong> {match.settlement.settlementAction}</p>}
             {match.settlement.settlementReason&&<p><strong>Settlement note:</strong> {match.settlement.settlementReason}</p>}
             {match.settlement.rejectionReason&&<p><strong>Rejection reason:</strong> {match.settlement.rejectionReason}</p>}
-            {match.player1ScreenshotUrl&&<div><small>Player 1 screenshot</small><img src={match.player1ScreenshotUrl} alt="Player 1 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
-            {match.player2ScreenshotUrl&&<div><small>Player 2 screenshot</small><img src={match.player2ScreenshotUrl} alt="Player 2 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
+            {match.player1ScreenshotUrl&&<div className="screenshot-evidence"><div className="screenshot-evidence-head"><small>Player 1 screenshot</small><Button variant="danger-outline" onClick={()=>requestScreenshotDeletion('p1','Player 1')}><Trash2 size={14}/>Delete</Button></div><img src={match.player1ScreenshotUrl} alt="Player 1 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
+            {match.player2ScreenshotUrl&&<div className="screenshot-evidence"><div className="screenshot-evidence-head"><small>Player 2 screenshot</small><Button variant="danger-outline" onClick={()=>requestScreenshotDeletion('p2','Player 2')}><Trash2 size={14}/>Delete</Button></div><img src={match.player2ScreenshotUrl} alt="Player 2 match evidence" style={{maxWidth:'100%',maxHeight:360,objectFit:'contain'}}/></div>}
             {settlementDetail.walletTransactions.length>0&&<div className="form-stack"><strong>Wallet transactions</strong>{settlementDetail.walletTransactions.map(transaction=><p key={transaction.id}>{transaction.transactionType} · {formatINR(Number(transaction.amount))} · {transaction.status} · {transaction.id.slice(0,8)}</p>)}</div>}
             <div className="modal-actions"><Button variant="secondary" onClick={closeDetail}>Close</Button></div>
           </div>
         })()}
       </DataState>
     </Modal>}
+    {screenshotToDelete&&<ConfirmModal title={`Delete ${screenshotToDelete.label} screenshot?`} message="Are you sure you want to delete this screenshot? This action cannot be undone." confirmLabel="Delete screenshot" danger busy={deletingScreenshot} onClose={()=>!deletingScreenshot&&setScreenshotToDelete(null)} onConfirm={deleteScreenshot}/ >}
   </>
 }
 

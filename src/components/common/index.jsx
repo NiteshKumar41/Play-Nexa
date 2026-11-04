@@ -150,14 +150,15 @@ export function ConfirmModal({
   onConfirm,
   onClose,
   danger = false,
+  busy = false,
 }) {
   return (
     <Modal title={title} onClose={onClose}>
       <p className="confirm-copy">{message}</p>
       <div className="modal-actions">
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
-          {confirmLabel}
+        <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+        <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={onConfirm}>
+          {busy ? 'Deleting…' : confirmLabel}
         </Button>
       </div>
     </Modal>

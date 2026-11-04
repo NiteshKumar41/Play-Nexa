@@ -98,3 +98,9 @@ export function rejectWinnerClaim(matchId, reason) {
     body: { action: 'REJECT_CLAIM', reason },
   })
 }
+
+export function deleteAdminScreenshot(screenshotId) {
+  return requestAdminApi(`/admin/screenshots/${encodeURIComponent(screenshotId)}`, {
+    method: 'DELETE',
+  })
+}

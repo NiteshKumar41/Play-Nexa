@@ -26,3 +26,4 @@
 @media(max-width:760px){.game-grid-page .game-art{height:auto;min-height:0;aspect-ratio:1}.game-grid-page .game-play{display:none}}
 @media(max-width:420px){.game-grid-page .game-art{width:96px;height:96px;min-height:0;grid-row:auto}.game-grid-page .game-tile-info{align-self:center}}
 .game-tile-link{display:block;color:inherit;text-decoration:none;cursor:pointer}
+.screenshot-evidence{display:grid;gap:8px}.screenshot-evidence-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.screenshot-evidence-head .btn{height:29px;font-size:11px;padding:0 8px}
